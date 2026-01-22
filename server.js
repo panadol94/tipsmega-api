@@ -30,7 +30,23 @@ const BOT_USERNAME = "@TIPSMEGA888OTPBOT";
 const OTP_TTL_MS = 3 * 60 * 1000; // 3 min
 
 // ===== INIT FIREBASE =====
-admin.initializeApp();
+// ===== INIT FIREBASE =====
+const serviceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+if (serviceAccountJson) {
+  try {
+    const serviceAccount = JSON.parse(serviceAccountJson);
+    admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount)
+    });
+    console.log("Firebase initialized with inline JSON.");
+  } catch (e) {
+    console.error("Failed to parse FIREBASE_SERVICE_ACCOUNT_JSON:", e);
+    process.exit(1);
+  }
+} else {
+  admin.initializeApp(); // Fallback to ADC or GOOGLE_APPLICATION_CREDENTIALS path
+}
+
 const db = admin.firestore();
 
 // ===== INIT GCS =====
