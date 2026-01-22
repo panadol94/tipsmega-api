@@ -86,6 +86,30 @@ If you are using Coolify on your VPS:
 
 ---
 
+---
+
+## Data Migration (Firestore -> MongoDB)
+
+To move your existing users and data from Firebase to your new VPS Database (run this **once** after deploying):
+
+1. **Open Terminal**:
+    - In Coolify, go to your `api-mini` service.
+    - Click on **Terminal** / **Command** tab.
+    - Click **Connect** (if needed).
+
+2. **Run Migration**:
+    Type the following command and press Enter:
+
+    ```bash
+    node migrate_firestore_to_mongo.js
+    ```
+
+3. **Wait**:
+    - You should see logs like `Migrating 'users'...`
+    - When it says `Migration Complete`, your data is safely in the new database!
+
+---
+
 ## Troubleshooting
 
 ### "Firebase initialized with inline JSON"
