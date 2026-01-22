@@ -40,10 +40,26 @@ if (serviceAccountJson) {
     console.log("DEBUG: First char code:", serviceAccountJson.charCodeAt(0));
 
     // Attempt to handle potential quoting issues
+    // Attempt to handle potential quoting issues
     let jsonString = serviceAccountJson;
+
+    // Remove wrapping single quotes
     if (jsonString.startsWith("'") && jsonString.endsWith("'")) {
       console.log("DEBUG: trimming single quotes");
       jsonString = jsonString.slice(1, -1);
+    }
+
+    // Handle escaped quotes (commonly caused by Docker/Env injection)
+    // E.g. {\"type\":\"...\"} -> {"type":"..."}
+    if (jsonString.indexOf('\\"') > -1) {
+      console.log("DEBUG: Cleaning escaped quotes");
+      jsonString = jsonString.replace(/\\"/g, '"');
+    }
+
+    // Also handle \\n if they became literal \\n inside the string due to double escaping
+    if (jsonString.indexOf('\\\\n') > -1) {
+      console.log("DEBUG: Cleaning double-escaped newlines");
+      jsonString = jsonString.replace(/\\\\n/g, '\\n');
     }
 
     const serviceAccount = JSON.parse(jsonString);
