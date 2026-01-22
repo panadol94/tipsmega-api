@@ -977,6 +977,140 @@ app.get("/api/companies", async (req, res) => {
   }
 });
 
+const admin = require("firebase-admin");
+
+// ... (keep existing imports)
+
+// ===== FIREBASE INIT (For Migration) =====
+const serviceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+if (admin.apps.length === 0 && serviceAccountJson) {
+  try {
+    let jsonString = serviceAccountJson;
+    if (jsonString.startsWith("'") && jsonString.endsWith("'")) jsonString = jsonString.slice(1, -1);
+    jsonString = jsonString.replace(/\\"/g, '"').replace(/\\\\n/g, '\\n');
+    const serviceAccount = JSON.parse(jsonString);
+    admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount)
+    });
+    console.log("✅ Firebase Admin Initialized for Migration");
+  } catch (e) {
+    console.error("⚠️ Failed to init Firebase:", e.message);
+  }
+}
+
+// ... (keep existing MongoDB connection and schemas)
+
+// =======================
+// MIGRATION ENDPOINT
+// =======================
+app.post("/api/migrate-from-firestore", async (req, res) => {
+  const secret = req.headers["x-admin-secret"];
+  if (secret !== ADMIN_SECRET) return res.status(403).json({ error: "Forbidden" });
+
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const db = admin.firestore();
+    const stats = { users: 0, devices: 0, tgUsers: 0, settings: 0, companies: 0 };
+
+    // 1. Settings
+    const settingSnap = await db.collection("settings").get();
+    for (const doc of settingSnap.docs) {
+      const data = doc.data();
+      await Setting.updateOne(
+        { key: data.id || doc.id },
+        { mode: data.approvalMode || "AUTO" },
+        { upsert: true, session }
+      );
+      stats.settings++;
+    }
+
+    // 2. TgUsers
+    const tgSnap = await db.collection("tg_users").get();
+    for (const doc of tgSnap.docs) {
+      const data = doc.data();
+      if (data.phone) {
+        await TgUser.updateOne(
+          { tgUserId: doc.id }, // ID is user key
+          { phone: data.phone },
+          { upsert: true, session }
+        );
+        stats.tgUsers++;
+      }
+    }
+
+    // 3. Users
+    const userSnap = await db.collection("users").get();
+    for (const doc of userSnap.docs) {
+      const data = doc.data();
+      await User.updateOne(
+        { phone: doc.id },
+        {
+          username: data.username,
+          passSalt: data.passSalt,
+          passHash: data.passHash,
+          verified: data.verified !== false, // default true usually if present
+          referralCode: data.referralCode,
+          referredBy: data.referredBy,
+          referralCount: data.referralCount || 0,
+          bonusStars: data.bonusStars || 0,
+          totalClaimedStars: data.totalClaimedStars || 0,
+          bonusGranted: data.bonusGranted || false,
+          bonusDeviceId: data.bonusDeviceId
+        },
+        { upsert: true, session }
+      );
+      stats.users++;
+    }
+
+    // 4. Devices
+    const devSnap = await db.collection("devices").get();
+    for (const doc of devSnap.docs) {
+      const data = doc.data();
+      await Device.updateOne(
+        { deviceId: doc.id },
+        {
+          stars: data.credit || data.stars || 0,
+          lastActiveDate: data.lastActiveDate || ""
+        },
+        { upsert: true, session }
+      );
+      stats.devices++;
+    }
+
+    // 5. Companies
+    const compSnap = await db.collection("companies").get();
+    for (const doc of compSnap.docs) {
+      const data = doc.data();
+      await Company.updateOne(
+        { name: doc.id }, // name was used as ID
+        {
+          link: data.link,
+          caption: data.caption,
+          status: data.status || "ACTIVE",
+          mediaType: data.mediaType,
+          storageUrl: data.storageUrl
+        },
+        { upsert: true, session }
+      );
+      stats.companies++;
+    }
+
+    await session.commitTransaction();
+    session.endSession();
+
+    console.log("Migration Complete:", stats);
+    res.json({ ok: true, stats });
+
+  } catch (e) {
+    await session.abortTransaction();
+    session.endSession();
+    console.error("Migration Failed:", e);
+    res.status(500).json({ error: String(e.message) });
+  }
+});
+
 const PORT = Number(process.env.PORT || 8080);
 app.get("/health", (req, res) => res.status(200).send("ok"));
 app.listen(PORT, "0.0.0.0", () => console.log("API running on port " + PORT));
