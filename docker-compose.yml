@@ -1,0 +1,28 @@
+version: "3.8"
+
+services:
+  api-mini:
+    build: .
+    container_name: tipsmega-bot
+    restart: always
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+      - NODE_ENV=production
+      # Telegram Config
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TG_GROUP_USER_JOIN=${TG_GROUP_USER_JOIN}
+      - TG_GROUP_ADMIN_REPORT=${TG_GROUP_ADMIN_REPORT}
+      - ADMIN_GROUP_ID=${ADMIN_GROUP_ID}
+      # Google Cloud / Firebase Config
+      - GCS_BUCKET_NAME=${GCS_BUCKET_NAME}
+      - FIREBASE_SERVICE_ACCOUNT_JSON=${FIREBASE_SERVICE_ACCOUNT_JSON}
+      # Security
+      - ADMIN_SECRET=${ADMIN_SECRET}
+      - AUTH_SECRET=${AUTH_SECRET}
+    volumes:
+      # Optional: Mount a volume if you want to store logs outside
+      # - ./logs:/app/logs
+      # Mount .env if you prefer file-based env (though coolify handles env vars via UI)
+      - ./.env:/app/.env

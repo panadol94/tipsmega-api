@@ -34,13 +34,29 @@ const OTP_TTL_MS = 3 * 60 * 1000; // 3 min
 const serviceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
 if (serviceAccountJson) {
   try {
-    const serviceAccount = JSON.parse(serviceAccountJson);
+    console.log("DEBUG: Raw FIREBASE_SERVICE_ACCOUNT_JSON:", serviceAccountJson);
+    console.log("DEBUG: Length:", serviceAccountJson.length);
+    console.log("DEBUG: Type:", typeof serviceAccountJson);
+    console.log("DEBUG: First char code:", serviceAccountJson.charCodeAt(0));
+
+    // Attempt to handle potential quoting issues
+    let jsonString = serviceAccountJson;
+    if (jsonString.startsWith("'") && jsonString.endsWith("'")) {
+      console.log("DEBUG: trimming single quotes");
+      jsonString = jsonString.slice(1, -1);
+    }
+
+    const serviceAccount = JSON.parse(jsonString);
     admin.initializeApp({
       credential: admin.credential.cert(serviceAccount)
     });
     console.log("Firebase initialized with inline JSON.");
   } catch (e) {
     console.error("Failed to parse FIREBASE_SERVICE_ACCOUNT_JSON:", e);
+    // Print first 100 chars to debug log
+    if (typeof serviceAccountJson === 'string') {
+      console.error("Start of string:", serviceAccountJson.substring(0, 100));
+    }
     process.exit(1);
   }
 } else {
