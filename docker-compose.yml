@@ -15,14 +15,10 @@ services:
       - TG_GROUP_USER_JOIN=${TG_GROUP_USER_JOIN}
       - TG_GROUP_ADMIN_REPORT=${TG_GROUP_ADMIN_REPORT}
       - ADMIN_GROUP_ID=${ADMIN_GROUP_ID}
-      # Google Cloud / Firebase Config
-      - GCS_BUCKET_NAME=${GCS_BUCKET_NAME}
-      - FIREBASE_SERVICE_ACCOUNT_JSON=${FIREBASE_SERVICE_ACCOUNT_JSON}
       # Security
-      - ADMIN_SECRET=${ADMIN_SECRET}
       - AUTH_SECRET=${AUTH_SECRET}
+      # Database
+      - MONGO_URL=${MONGO_URL}
     volumes:
-      # Optional: Mount a volume if you want to store logs outside
-      # - ./logs:/app/logs
-      # Mount .env if you prefer file-based env (though coolify handles env vars via UI)
+      - ./public/uploads:/app/public/uploads
       - ./.env:/app/.env

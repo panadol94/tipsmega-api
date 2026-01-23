@@ -9,7 +9,15 @@ const fs = require("fs");
 const path = require("path");
 const os = require("os");
 const crypto = require("crypto");
+
+// NEW: Chatroom Dependencies
+const http = require("http");
+const { Server } = require("socket.io");
+const cron = require("node-cron");
+const multer = require("multer");
+
 const app = express();
+const server = http.createServer(app); // Wrap express with HTTP server for Socket.io
 app.use(cors());
 app.use(express.json());
 app.use("/uploads", express.static(path.join(__dirname, "public/uploads")));
@@ -117,6 +125,17 @@ const ReferralLogSchema = new mongoose.Schema({
   reward: Number,
 }, { timestamps: true });
 const ReferralLog = mongoose.model("ReferralLog", ReferralLogSchema);
+
+// 8. Chat Messages (Global Shoutbox)
+const ChatMessageSchema = new mongoose.Schema({
+  sender: { type: String, required: true }, // username or 'Admin'
+  senderLevel: { type: String, default: "MEMBER" }, // MEMBER, ADMIN
+  content: String,
+  mediaUrl: String,
+  mediaType: String, // 'image', 'video'
+  status: { type: String, default: "ACTIVE" }, // ACTIVE, EXPIRED
+}, { timestamps: true });
+const ChatMessage = mongoose.model("ChatMessage", ChatMessageSchema);
 
 
 // ===== HELPERS =====
@@ -958,6 +977,157 @@ app.get("/api/companies", async (req, res) => {
 });
 
 
+// =======================
+// CHATROOM: FILE UPLOAD
+// =======================
+const chatStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const dir = path.join(__dirname, "public/uploads/chat");
+    try {
+      if (!fs.existsSync(dir)) {
+        console.log("📂 Creating upload directory:", dir);
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      cb(null, dir);
+    } catch (e) {
+      console.error("❌ Failed to create upload dir:", dir, e);
+      cb(e, dir);
+    }
+  },
+  filename: (req, file, cb) => {
+    // Unique name
+    const ext = path.extname(file.originalname);
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, uniqueSuffix + ext);
+  }
+});
+const chatUpload = multer({ storage: chatStorage });
+
+app.post("/api/chat/upload", chatUpload.single("file"), (req, res) => {
+  console.log("➡️ Received Upload Request");
+  try {
+    if (!req.file) {
+      console.error("❌ No file in request");
+      return res.status(400).json({ error: "No file uploaded" });
+    }
+    console.log("✅ File uploaded:", req.file.filename);
+
+    // Return web-accessible path
+    const url = `/uploads/chat/${req.file.filename}`;
+    const md = req.file.mimetype;
+    let type = "image";
+    if (md.startsWith("video")) type = "video";
+    if (md.startsWith("audio")) type = "audio";
+
+    res.json({ ok: true, url, type });
+  } catch (e) {
+    res.status(500).json({ error: "Upload failed: " + e.message });
+  }
+});
+
+// =======================
+// SOCKET.IO: REAL-TIME CHAT
+// =======================
+const io = new Server(server, {
+  cors: {
+    origin: "*", // Allow all origins for simplicity (or restrict to tipsmega888.com)
+    methods: ["GET", "POST"]
+  }
+});
+
+io.on("connection", (socket) => {
+  console.log("🔌 Socket Connected:", socket.id);
+
+  socket.on("join_global", async () => {
+    console.log("➡️ Socket joining global:", socket.id);
+    socket.join("global");
+
+    // Send last 50 active messages
+    try {
+      const history = await ChatMessage.find({ status: "ACTIVE" })
+        .sort({ createdAt: -1 })
+        .limit(50);
+      socket.emit("history", history.reverse());
+    } catch (e) {
+      console.error("❌ Socket history error:", e);
+    }
+  });
+
+  socket.on("send_message", async (data) => {
+    console.log("📩 Received Message from:", data.sender);
+    // data: { sender, content, mediaUrl, mediaType }
+    try {
+      const isCmd = (data.sender || "").toLowerCase().includes("admin") || (data.sender || "").includes("Commander");
+
+      const msg = await ChatMessage.create({
+        sender: data.sender || "Anonymous",
+        senderLevel: isCmd ? "ADMIN" : "MEMBER",
+        content: data.content,
+        mediaUrl: data.mediaUrl,
+        mediaType: data.mediaType,
+        status: "ACTIVE"
+      });
+
+      // Broadcast to everyone in 'global'
+      io.to("global").emit("new_message", msg);
+    } catch (e) {
+      console.error("Socket send error:", e);
+      socket.emit("error", "Failed to send message");
+    }
+  });
+});
+
+// =======================
+// CRON: AUTO-CLEANUP (24H)
+// =======================
+cron.schedule("0 * * * *", async () => {
+  // Run every hour
+  console.log("🧹 Running Media Cleanup Job...");
+  try {
+    const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000); // 24 hours ago
+
+    // Find messages older than 24h that still have media and are ACTIVE
+    const dustyMsgs = await ChatMessage.find({
+      createdAt: { $lt: cutoff },
+      mediaUrl: { $ne: null },
+      status: "ACTIVE"
+    });
+
+    if (dustyMsgs.length > 0) {
+      console.log(`Found ${dustyMsgs.length} expired media items.`);
+
+      for (const msg of dustyMsgs) {
+        // Delete physical file
+        if (msg.mediaUrl) {
+          // mediaUrl is like "/uploads/chat/xyz.jpg"
+          // We need absolute path: __dirname/public/uploads/chat/xyz.jpg
+          const relPath = msg.mediaUrl.replace(/^\//, ""); // remove leading slash
+          const absPath = path.join(__dirname, "public", relPath);
+
+          if (fs.existsSync(absPath)) {
+            try {
+              fs.unlinkSync(absPath);
+              console.log("Deleted:", absPath);
+            } catch (err) {
+              console.error("Failed to delete file:", absPath, err);
+            }
+          }
+        }
+
+        // Update DB
+        msg.status = "EXPIRED";
+        msg.mediaUrl = null;
+        await msg.save();
+      }
+    }
+  } catch (e) {
+    console.error("Cron Job Error:", e);
+  }
+});
+
+
 const PORT = Number(process.env.PORT || 8080);
 app.get("/health", (req, res) => res.status(200).send("ok"));
-app.listen(PORT, "0.0.0.0", () => console.log("API running on port " + PORT));
+
+// CRITICAL: Change app.listen to server.listen for Socket.io
+server.listen(PORT, "0.0.0.0", () => console.log("API (Socket+Cron) running on port " + PORT));

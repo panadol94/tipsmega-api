@@ -12,13 +12,14 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
-    "@google-cloud/storage": "^7.18.0",
     "axios": "^1.13.2",
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
     "express": "^5.2.1",
-    "firebase-admin": "^13.6.0",
     "mongoose": "^8.9.5",
-    "node-telegram-bot-api": "^0.67.0"
+    "multer": "^2.0.2",
+    "node-cron": "^4.2.1",
+    "node-telegram-bot-api": "^0.67.0",
+    "socket.io": "^4.8.3"
   }
 }
