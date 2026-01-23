@@ -1075,6 +1075,34 @@ io.on("connection", (socket) => {
       socket.emit("error", "Failed to send message");
     }
   });
+
+  // Handle Delete Message
+  socket.on("delete_message", async (data) => {
+    // data: { messageId, sender }
+    console.log("🗑️ Delete Request:", data);
+    try {
+      const msg = await ChatMessage.findById(data.messageId);
+      if (!msg) return;
+
+      // Verify ownership (or if admin)
+      if (msg.sender !== data.sender) {
+        console.warn("🚫 Unauthorized delete attempt:", data.sender);
+        return; // specific user error emission optional
+      }
+
+      msg.status = "DELETED";
+      msg.content = ""; // Clear content for privacy
+      msg.mediaUrl = ""; // Remove media link reference
+      await msg.save();
+
+      // Notify clients to update UI
+      io.to("global").emit("message_deleted", { messageId: data.messageId });
+      console.log("✅ Message deleted:", data.messageId);
+
+    } catch (e) {
+      console.error("❌ Delete error:", e);
+    }
+  });
 });
 
 // =======================
