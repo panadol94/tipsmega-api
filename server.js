@@ -5,24 +5,21 @@ const cors = require("cors");
 const mongoose = require("mongoose");
 const TelegramBot = require("node-telegram-bot-api");
 const axios = require("axios");
-const { Storage } = require("@google-cloud/storage");
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
 const crypto = require("crypto");
-
 const app = express();
 app.use(cors());
 app.use(express.json());
+app.use("/uploads", express.static(path.join(__dirname, "public/uploads")));
 
 // ===== ENV =====
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const GROUP_USER_JOIN = process.env.TG_GROUP_USER_JOIN; // -100...
 const GROUP_ADMIN_REPORT = process.env.TG_GROUP_ADMIN_REPORT; // -100...
 const ADMIN_GROUP_ID = process.env.ADMIN_GROUP_ID || GROUP_ADMIN_REPORT;
-const GCS_BUCKET = process.env.GCS_BUCKET_NAME;
-const ADMIN_SECRET = process.env.ADMIN_SECRET || "";
-const AUTH_SECRET = process.env.AUTH_SECRET || process.env.ADMIN_SECRET || "CHANGE_ME_AUTH_SECRET";
+const AUTH_SECRET = process.env.AUTH_SECRET || "CHANGE_ME_AUTH_SECRET";
 const MONGO_URL = process.env.MONGO_URL || "mongodb://root:example@localhost:27017";
 
 const DAILY_LIMIT = 5;
@@ -122,9 +119,7 @@ const ReferralLogSchema = new mongoose.Schema({
 const ReferralLog = mongoose.model("ReferralLog", ReferralLogSchema);
 
 
-// ===== INIT GCS =====
-const storage = new Storage();
-const bucket = storage.bucket(GCS_BUCKET);
+// ===== HELPERS =====
 
 // ===== INIT TELEGRAM BOT (WEBHOOK MODE) =====
 const bot = new TelegramBot(BOT_TOKEN, { webHook: true });
@@ -369,9 +364,20 @@ bot.onText(/\/delcompany (.+)/, async (msg, match) => {
     return bot.sendMessage(msg.chat.id, `⚠️ Company tak jumpa: ${safeName}`);
   }
 
+  // Attempt to delete physical files
+  try {
+    const uploadDir = path.join(__dirname, "public/uploads", safeName);
+    if (fs.existsSync(uploadDir)) {
+      fs.rmSync(uploadDir, { recursive: true, force: true });
+    }
+  } catch (e) {
+    console.error("Delete file error:", e);
+    // proceed to delete DB record anyway
+  }
+
   await Company.deleteOne({ _id: c._id });
 
-  bot.sendMessage(msg.chat.id, `❌ Company *${safeName}* telah dipadam.`, { parse_mode: "Markdown" });
+  bot.sendMessage(msg.chat.id, `❌ Company *${safeName}* dan media telah dipadam.`, { parse_mode: "Markdown" });
 });
 
 // =======================
@@ -474,10 +480,16 @@ bot.on("message", async (msg) => {
 
       const file = await bot.getFile(fileId);
       const url = `https://api.telegram.org/file/bot${BOT_TOKEN}/${file.file_path}`;
-      const tempPath = path.join(os.tmpdir(), `${Date.now()}.${ext}`);
 
-      const writer = fs.createWriteStream(tempPath);
       const response = await axios({ url, method: "GET", responseType: "stream" });
+
+      const safeName = String(wizard.data.name || "company").replace(/[^\w\- ]+/g, "").trim() || "company";
+      const fileName = `${Date.now()}.${ext}`;
+      const uploadDir = path.join(__dirname, "public/uploads", safeName);
+      if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+
+      const localPath = path.join(uploadDir, fileName);
+      const writer = fs.createWriteStream(localPath);
       response.data.pipe(writer);
 
       await new Promise((resolve, reject) => {
@@ -485,16 +497,7 @@ bot.on("message", async (msg) => {
         writer.on("error", reject);
       });
 
-      const safeName = String(wizard.data.name || "company").replace(/[^\w\- ]+/g, "").trim() || "company";
-      const gcsPath = `companies/${safeName}/${Date.now()}.${ext}`;
-
-      await bucket.upload(tempPath, {
-        destination: gcsPath,
-        public: true,
-        metadata: { cacheControl: "public, max-age=31536000" },
-      });
-
-      const storageUrl = `https://storage.googleapis.com/${GCS_BUCKET}/${gcsPath}`;
+      const storageUrl = `/uploads/${safeName}/${fileName}`;
 
       await Company.create({
         name: safeName,
@@ -509,9 +512,7 @@ bot.on("message", async (msg) => {
       return bot.sendMessage(chatId, `✅ Company *${safeName}* telah LIVE di website!`, { parse_mode: "Markdown" });
     } catch (e) {
       delete companyWizard[userId];
-      return bot.sendMessage(chatId, "❌ Upload gagal. Cuba /addcompany semula.");
-    } finally {
-      if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+      return bot.sendMessage(chatId, `❌ Upload gagal: ${e.message}. Cuba /addcompany semula.`);
     }
   }
 });
@@ -532,13 +533,11 @@ app.get("/api/_debug/db", async (_req, res) => {
 // API: INIT DEVICE (free 1 star first time)
 // =======================
 app.post("/api/init", async (req, res) => {
-  const session = await mongoose.startSession();
-  session.startTransaction();
   try {
     const { deviceId } = req.body || {};
     if (!deviceId) throw new Error("missing deviceId");
 
-    let device = await Device.findOne({ deviceId }).session(session);
+    let device = await Device.findOne({ deviceId });
     let finalStars = 0;
     let isNew = false;
     let needsUpdate = false;
@@ -570,16 +569,11 @@ app.post("/api/init", async (req, res) => {
     }
 
     if (needsUpdate || isNew) {
-      await device.save({ session });
+      await device.save();
     }
-
-    await session.commitTransaction();
-    session.endSession();
 
     return res.json({ deviceId, stars: finalStars, isNew });
   } catch (e) {
-    await session.abortTransaction();
-    session.endSession();
     return res.status(500).json({ error: "Init failed", detail: String(e.message) });
   }
 });
@@ -588,14 +582,12 @@ app.post("/api/init", async (req, res) => {
 // API: SCAN (deduct 1 star)
 // =======================
 app.post("/api/scan", async (req, res) => {
-  const session = await mongoose.startSession();
-  session.startTransaction();
   try {
     const { deviceId, megaId } = req.body || {};
     if (!deviceId) throw new Error("missing deviceId");
     if (!megaId) throw new Error("missing megaId");
 
-    const device = await Device.findOne({ deviceId }).session(session);
+    const device = await Device.findOne({ deviceId });
     if (!device) throw new Error("device not initialized");
 
     const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kuala_Lumpur" });
@@ -617,17 +609,14 @@ app.post("/api/scan", async (req, res) => {
     currentStars -= 1;
     device.stars = currentStars;
 
-    await device.save({ session });
+    await device.save();
 
-    // 3. Log (can be outside tx, but inside is safer for consistency)
-    await ScanLog.create([{
+    // 3. Log
+    await ScanLog.create({
       deviceId,
       megaId,
       overallRtp: Math.floor(10 + Math.random() * 84),
-    }], { session });
-
-    await session.commitTransaction();
-    session.endSession();
+    });
 
     // Re-fetch log for RTP or just calc again
     const overallRtp = Math.floor(10 + Math.random() * 84);
@@ -635,8 +624,6 @@ app.post("/api/scan", async (req, res) => {
     return res.json({ ok: true, overallRtp, stars: currentStars });
 
   } catch (e) {
-    await session.abortTransaction();
-    session.endSession();
     if (e.message === "NO_STARS") {
       return res.status(402).json({ error: "no stars", stars: 0 });
     }
@@ -713,8 +700,6 @@ function makeReferralCode() {
 // AUTH: REGISTER
 // =======================
 app.post("/api/auth/register", async (req, res) => {
-  const session = await mongoose.startSession();
-  session.startTransaction();
   try {
     const phone = normalizePhone(req.body?.phone);
     const username = String(req.body?.username || "").trim();
@@ -726,24 +711,24 @@ app.post("/api/auth/register", async (req, res) => {
     if (!username || username.length < 3) throw new Error("Username too short");
 
     // Check UserName duplicate
-    const existingUser = await User.findOne({ username }).session(session);
+    const existingUser = await User.findOne({ username });
     if (existingUser) throw new Error(`Username '${username}' taken.`);
 
     // Verify OTP
-    const otpDoc = await WebOtp.findOne({ phone }).session(session);
+    const otpDoc = await WebOtp.findOne({ phone });
     if (!otpDoc || otpDoc.expiresAt < new Date()) throw new Error("OTP expired/invalid");
     if (otpDoc.attempts >= 3) {
-      await WebOtp.deleteOne({ phone }).session(session);
+      await WebOtp.deleteOne({ phone });
       throw new Error("Too many attempts");
     }
     if (otpDoc.otpHash !== hashOTP(otp)) {
       otpDoc.attempts += 1;
-      await otpDoc.save({ session });
+      await otpDoc.save();
       throw new Error("OTP Salah");
     }
 
     // Check Account Duplicate
-    const acc = await User.findOne({ phone }).session(session);
+    const acc = await User.findOne({ phone });
     if (acc && acc.verified) throw new Error("Account already exists");
 
     // Create
@@ -757,19 +742,19 @@ app.post("/api/auth/register", async (req, res) => {
     // Referrer Logic
     let referredBy = null;
     if (refCode && refCode.length === 6) {
-      const referrer = await User.findOne({ referralCode: refCode }).session(session);
+      const referrer = await User.findOne({ referralCode: refCode });
       if (referrer && referrer.phone !== phone) {
         referredBy = referrer.phone;
         referrer.bonusStars += 1; // Reward
         referrer.referralCount += 1;
-        await referrer.save({ session });
+        await referrer.save();
 
-        await ReferralLog.create([{
+        await ReferralLog.create({
           referrer: referrer.phone,
           referee: phone,
           code: refCode,
           reward: 1
-        }], { session });
+        });
       }
     }
 
@@ -783,9 +768,9 @@ app.post("/api/auth/register", async (req, res) => {
       acc.referralCode = newMyRefCode;
       acc.referredBy = referredBy;
       acc.bonusStars = 30; // Welcome bonus
-      await acc.save({ session });
+      await acc.save();
     } else {
-      await User.create([{
+      await User.create({
         phone,
         username,
         passSalt: salt,
@@ -794,19 +779,14 @@ app.post("/api/auth/register", async (req, res) => {
         referralCode: newMyRefCode,
         referredBy,
         bonusStars: 30,
-      }], { session });
+      });
     }
 
-    await WebOtp.deleteOne({ phone }).session(session);
-
-    await session.commitTransaction();
-    session.endSession();
+    await WebOtp.deleteOne({ phone });
 
     return res.json({ ok: true, phone, username, referralCode: newMyRefCode });
 
   } catch (e) {
-    await session.abortTransaction();
-    session.endSession();
     return res.status(500).json({ error: "register failed", detail: String(e.message) });
   }
 });
@@ -977,139 +957,6 @@ app.get("/api/companies", async (req, res) => {
   }
 });
 
-const admin = require("firebase-admin");
-
-// ... (keep existing imports)
-
-// ===== FIREBASE INIT (For Migration) =====
-const serviceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
-if (admin.apps.length === 0 && serviceAccountJson) {
-  try {
-    let jsonString = serviceAccountJson;
-    if (jsonString.startsWith("'") && jsonString.endsWith("'")) jsonString = jsonString.slice(1, -1);
-    jsonString = jsonString.replace(/\\"/g, '"').replace(/\\\\n/g, '\\n');
-    const serviceAccount = JSON.parse(jsonString);
-    admin.initializeApp({
-      credential: admin.credential.cert(serviceAccount)
-    });
-    console.log("✅ Firebase Admin Initialized for Migration");
-  } catch (e) {
-    console.error("⚠️ Failed to init Firebase:", e.message);
-  }
-}
-
-// ... (keep existing MongoDB connection and schemas)
-
-// =======================
-// MIGRATION ENDPOINT
-// =======================
-app.post("/api/migrate-from-firestore", async (req, res) => {
-  const secret = req.headers["x-admin-secret"];
-  if (secret !== ADMIN_SECRET) return res.status(403).json({ error: "Forbidden" });
-
-  const session = await mongoose.startSession();
-  session.startTransaction();
-
-  try {
-    const db = admin.firestore();
-    const stats = { users: 0, devices: 0, tgUsers: 0, settings: 0, companies: 0 };
-
-    // 1. Settings
-    const settingSnap = await db.collection("settings").get();
-    for (const doc of settingSnap.docs) {
-      const data = doc.data();
-      await Setting.updateOne(
-        { key: data.id || doc.id },
-        { mode: data.approvalMode || "AUTO" },
-        { upsert: true, session }
-      );
-      stats.settings++;
-    }
-
-    // 2. TgUsers
-    const tgSnap = await db.collection("tg_users").get();
-    for (const doc of tgSnap.docs) {
-      const data = doc.data();
-      if (data.phone) {
-        await TgUser.updateOne(
-          { tgUserId: doc.id }, // ID is user key
-          { phone: data.phone },
-          { upsert: true, session }
-        );
-        stats.tgUsers++;
-      }
-    }
-
-    // 3. Users
-    const userSnap = await db.collection("users").get();
-    for (const doc of userSnap.docs) {
-      const data = doc.data();
-      await User.updateOne(
-        { phone: doc.id },
-        {
-          username: data.username,
-          passSalt: data.passSalt,
-          passHash: data.passHash,
-          verified: data.verified !== false, // default true usually if present
-          referralCode: data.referralCode,
-          referredBy: data.referredBy,
-          referralCount: data.referralCount || 0,
-          bonusStars: data.bonusStars || 0,
-          totalClaimedStars: data.totalClaimedStars || 0,
-          bonusGranted: data.bonusGranted || false,
-          bonusDeviceId: data.bonusDeviceId
-        },
-        { upsert: true, session }
-      );
-      stats.users++;
-    }
-
-    // 4. Devices
-    const devSnap = await db.collection("devices").get();
-    for (const doc of devSnap.docs) {
-      const data = doc.data();
-      await Device.updateOne(
-        { deviceId: doc.id },
-        {
-          stars: data.credit || data.stars || 0,
-          lastActiveDate: data.lastActiveDate || ""
-        },
-        { upsert: true, session }
-      );
-      stats.devices++;
-    }
-
-    // 5. Companies
-    const compSnap = await db.collection("companies").get();
-    for (const doc of compSnap.docs) {
-      const data = doc.data();
-      await Company.updateOne(
-        { name: doc.id }, // name was used as ID
-        {
-          link: data.link,
-          caption: data.caption,
-          status: data.status || "ACTIVE",
-          mediaType: data.mediaType,
-          storageUrl: data.storageUrl
-        },
-        { upsert: true, session }
-      );
-      stats.companies++;
-    }
-
-    await session.commitTransaction();
-    session.endSession();
-
-    console.log("Migration Complete:", stats);
-    res.json({ ok: true, stats });
-
-  } catch (e) {
-    await session.abortTransaction();
-    session.endSession();
-    console.error("Migration Failed:", e);
-    res.status(500).json({ error: String(e.message) });
-  }
-});
 
 const PORT = Number(process.env.PORT || 8080);
 app.get("/health", (req, res) => res.status(200).send("ok"));
