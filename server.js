@@ -466,7 +466,8 @@ bot.onText(/\/deduct (.+) (.+)/, async (msg, match) => {
   }
 
   try {
-    const user = await User.findOne({ username: targetUsername });
+    // Case-insensitive exact match
+    const user = await User.findOne({ username: { $regex: new RegExp("^" + targetUsername + "$", "i") } });
     if (!user) {
       return bot.sendMessage(chatId, `❌ User *${targetUsername}* tak jumpa.`);
     }
