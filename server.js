@@ -134,8 +134,9 @@ const ChatMessageSchema = new mongoose.Schema({
   senderLevel: { type: String, default: "MEMBER" }, // MEMBER, ADMIN
   content: String,
   mediaUrl: String,
-  mediaType: String, // 'image', 'video'
+  mediaType: String, // 'image', 'video', 'audio'
   status: { type: String, default: "ACTIVE" }, // ACTIVE, EXPIRED, DELETED
+  likes: [String], // Array of usernames who liked this message
 }, { timestamps: true });
 const ChatMessage = mongoose.model("ChatMessage", ChatMessageSchema);
 
@@ -1117,6 +1118,41 @@ app.post("/api/chat/upload", chatUpload.single("file"), (req, res) => {
     res.json({ ok: true, url, type });
   } catch (e) {
     res.status(500).json({ error: "Upload failed: " + e.message });
+  }
+});
+
+app.post("/api/chat/react", async (req, res) => {
+  try {
+    const auth = String(req.headers.authorization || "");
+    const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+    const payload = verifyToken(token);
+    const user = payload?.username;
+
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+
+    const { messageId } = req.body;
+    if (!messageId) return res.status(400).json({ error: "messageId required" });
+
+    const msg = await ChatMessage.findById(messageId);
+    if (!msg) return res.status(404).json({ error: "Message not found" });
+
+    // Toggle logic
+    const idx = msg.likes.indexOf(user);
+    if (idx >= 0) {
+      msg.likes.splice(idx, 1); // Unlike
+    } else {
+      msg.likes.push(user); // Like
+    }
+    await msg.save();
+
+    // Broadcast update
+    if (io) {
+      io.to(msg.roomId).emit("message_updated", msg);
+    }
+
+    res.json({ ok: true, likes: msg.likes });
+  } catch (e) {
+    res.status(500).json({ error: "Reaction failed: " + e.message });
   }
 });
 
