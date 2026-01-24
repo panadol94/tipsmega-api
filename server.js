@@ -1001,6 +1001,76 @@ app.get("/api/companies", async (req, res) => {
 });
 
 
+
+// =======================
+// API: FRIEND REQUESTS
+// =======================
+app.get("/api/friend-requests", async (req, res) => {
+  try {
+    const auth = String(req.headers.authorization || "");
+    const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+    const payload = verifyToken(token);
+    const phone = normalizePhone(payload?.phone);
+
+    const user = await User.findOne({ phone });
+    if (!user) return res.status(404).json({ error: "User not found" });
+
+    const requests = await FriendRequest.find({ to: user.username, status: "PENDING" }).sort({ createdAt: -1 });
+    res.json({ ok: true, requests });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e.message) });
+  }
+});
+
+app.post("/api/friend-requests/accept", async (req, res) => {
+  try {
+    const auth = String(req.headers.authorization || "");
+    const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+    const payload = verifyToken(token);
+    const phone = normalizePhone(payload?.phone);
+
+    const user = await User.findOne({ phone });
+    if (!user) return res.status(404).json({ error: "User not found" });
+
+    const { requestId } = req.body;
+    const reqDoc = await FriendRequest.findById(requestId);
+    if (!reqDoc) return res.status(404).json({ error: "Request not found" });
+    if (reqDoc.to !== user.username) return res.status(403).json({ error: "Not your request" });
+
+    reqDoc.status = "ACCEPTED";
+    await reqDoc.save();
+
+    // Add to friends lists
+    await User.updateOne({ username: reqDoc.from }, { $addToSet: { friends: reqDoc.to } });
+    await User.updateOne({ username: reqDoc.to }, { $addToSet: { friends: reqDoc.from } });
+
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e.message) });
+  }
+});
+
+app.post("/api/friend-requests/reject", async (req, res) => {
+  try {
+    const auth = String(req.headers.authorization || "");
+    const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+    const payload = verifyToken(token);
+    const phone = normalizePhone(payload?.phone);
+
+    const user = await User.findOne({ phone });
+    if (!user) return res.status(404).json({ error: "User not found" });
+
+    const { requestId } = req.body;
+    const reqDoc = await FriendRequest.findOneAndDelete({ _id: requestId, to: user.username });
+
+    if (!reqDoc) return res.status(404).json({ error: "Request not found (or already handled)" });
+
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e.message) });
+  }
+});
+
 // =======================
 // CHATROOM: FILE UPLOAD
 // =======================
