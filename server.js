@@ -76,6 +76,7 @@ const UserSchema = new mongoose.Schema({
   totalClaimedStars: { type: Number, default: 0 },
   bonusGranted: { type: Boolean, default: false }, // Legacy flag
   bonusDeviceId: String,
+  friends: [String], // [username1, username2]
 }, { timestamps: true });
 const User = mongoose.model("User", UserSchema);
 
@@ -128,14 +129,37 @@ const ReferralLog = mongoose.model("ReferralLog", ReferralLogSchema);
 
 // 8. Chat Messages (Global Shoutbox)
 const ChatMessageSchema = new mongoose.Schema({
-  sender: { type: String, required: true }, // username or 'Admin'
+  roomId: { type: String, default: "global" }, // 'global' or 'GROUP_ID' or 'DM_ID'
+  sender: { type: String, required: true }, // username
   senderLevel: { type: String, default: "MEMBER" }, // MEMBER, ADMIN
   content: String,
   mediaUrl: String,
   mediaType: String, // 'image', 'video'
-  status: { type: String, default: "ACTIVE" }, // ACTIVE, EXPIRED
+  status: { type: String, default: "ACTIVE" }, // ACTIVE, EXPIRED, DELETED
 }, { timestamps: true });
 const ChatMessage = mongoose.model("ChatMessage", ChatMessageSchema);
+
+// 9. Friend Request
+const FriendRequestSchema = new mongoose.Schema({
+  from: { type: String, required: true }, // username
+  to: { type: String, required: true }, // username
+  status: { type: String, default: "PENDING" }, // PENDING, ACCEPTED, REJECTED
+}, { timestamps: true });
+const FriendRequest = mongoose.model("FriendRequest", FriendRequestSchema);
+
+// 10. Chat Group
+const ChatGroupSchema = new mongoose.Schema({
+  name: String,
+  type: { type: String, default: "GROUP" }, // GROUP, DM
+  members: [String], // [username1, username2]
+  admins: [String], // [username1]
+  lastMessage: {
+    content: String,
+    sender: String,
+    createdAt: Date
+  }
+}, { timestamps: true });
+const ChatGroup = mongoose.model("ChatGroup", ChatGroupSchema);
 
 
 // ===== HELPERS =====
@@ -1028,6 +1052,9 @@ app.post("/api/chat/upload", chatUpload.single("file"), (req, res) => {
 // =======================
 // SOCKET.IO: REAL-TIME CHAT
 // =======================
+// =======================
+// SOCKET.IO: REAL-TIME CHAT
+// =======================
 const io = new Server(server, {
   cors: {
     origin: "*", // Allow all origins for simplicity (or restrict to tipsmega888.com)
@@ -1038,13 +1065,15 @@ const io = new Server(server, {
 io.on("connection", (socket) => {
   console.log("🔌 Socket Connected:", socket.id);
 
-  socket.on("join_global", async () => {
-    console.log("➡️ Socket joining global:", socket.id);
-    socket.join("global");
+  // JOIN ROOM (Global, Group, or DM)
+  socket.on("join_room", async ({ roomId, username }) => {
+    const room = roomId || "global";
+    console.log(`➡️ Socket ${socket.id} (${username}) joining ${room}`);
+    socket.join(room);
 
-    // Send last 50 active messages
+    // Send history for this room
     try {
-      const history = await ChatMessage.find({ status: "ACTIVE" })
+      const history = await ChatMessage.find({ roomId: room, status: { $ne: "DELETED" } })
         .sort({ createdAt: -1 })
         .limit(50);
       socket.emit("history", history.reverse());
@@ -1053,13 +1082,17 @@ io.on("connection", (socket) => {
     }
   });
 
+  // SEND MESSAGE
   socket.on("send_message", async (data) => {
-    console.log("📩 Received Message from:", data.sender);
-    // data: { sender, content, mediaUrl, mediaType }
+    // data: { roomId, sender, content, mediaUrl, mediaType }
+    const roomId = data.roomId || "global";
+    console.log(`📩 Msg from ${data.sender} to ${roomId}`);
+
     try {
       const isCmd = (data.sender || "").toLowerCase().includes("admin") || (data.sender || "").includes("Commander");
 
       const msg = await ChatMessage.create({
+        roomId,
         sender: data.sender || "Anonymous",
         senderLevel: isCmd ? "ADMIN" : "MEMBER",
         content: data.content,
@@ -1068,11 +1101,90 @@ io.on("connection", (socket) => {
         status: "ACTIVE"
       });
 
-      // Broadcast to everyone in 'global'
-      io.to("global").emit("new_message", msg);
+      // Update Group lastMessage if it's a group
+      if (roomId !== "global") {
+        await ChatGroup.findByIdAndUpdate(roomId, {
+          lastMessage: {
+            content: data.content || (data.mediaUrl ? "Media Attachment" : ""),
+            sender: data.sender,
+            createdAt: new Date()
+          }
+        });
+      }
+
+      // Broadcast to specific room
+      io.to(roomId).emit("new_message", msg);
     } catch (e) {
       console.error("Socket send error:", e);
       socket.emit("error", "Failed to send message");
+    }
+  });
+
+  // FRIEND REQUEST
+  socket.on("send_friend_request", async ({ from, to }) => {
+    try {
+      const targetUser = await User.findOne({ username: to });
+      if (!targetUser) return socket.emit("error", "User not found");
+
+      const exists = await FriendRequest.findOne({ from, to, status: "PENDING" });
+      if (exists) return socket.emit("error", "Request already pending");
+
+      const req = await FriendRequest.create({ from, to });
+      // Emit to specific user if connected (Need user-socket mapping, skipped for simplicity, user polls or refreshes)
+      // For now, we can broadcast to a "user_room" if we implemented that.
+      // Assuming clients subscribe to their own username room:
+      io.to(to).emit("friend_request_received", req);
+    } catch (e) {
+      console.error("Friend Request Error:", e);
+    }
+  });
+
+  // ACCEPT FRIEND REQUEST
+  socket.on("accept_friend_request", async ({ requestId }) => {
+    try {
+      const req = await FriendRequest.findById(requestId);
+      if (!req) return;
+
+      req.status = "ACCEPTED";
+      await req.save();
+
+      // Add to friends lists (Set to ensure unique)
+      await User.updateOne({ username: req.from }, { $addToSet: { friends: req.to } });
+      await User.updateOne({ username: req.to }, { $addToSet: { friends: req.from } });
+
+      // Notify both parties
+      // Ideally we should emit to specific socket IDs mapped to usernames
+      io.to(req.from).emit("friend_request_accepted", { friend: req.to });
+      io.to(req.to).emit("friend_request_accepted", { friend: req.from });
+
+      console.log(`✅ Friend Request Accepted: ${req.from} <-> ${req.to}`);
+    } catch (e) {
+      console.error("Accept Friend Error:", e);
+    }
+  });
+
+  // CREATE GROUP
+  socket.on("create_group", async ({ name, members, admins }) => {
+    try {
+      const group = await ChatGroup.create({
+        name,
+        members, // Array of usernames
+        admins,
+        type: "GROUP",
+        lastMessage: { content: "Group Created", sender: "System", createdAt: new Date() }
+      });
+      // Notify all members
+      members.forEach(m => io.to(m).emit("group_added", group));
+    } catch (e) {
+      console.error("Create Group Error:", e);
+    }
+  });
+
+  // JOIN SELF ROOM (For notifications)
+  socket.on("join_self", (username) => {
+    if (username) {
+      console.log(`👤 Socket ${socket.id} joined self-room: ${username}`);
+      socket.join(username);
     }
   });
 
