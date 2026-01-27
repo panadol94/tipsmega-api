@@ -1325,6 +1325,301 @@ io.on("connection", (socket) => {
 });
 
 // =======================
+// ADMIN PANEL API
+// =======================
+
+// Games Schema
+const GameSchema = new mongoose.Schema({
+  name: { type: String, required: true },
+  icon: { type: String, default: "🎰" },
+  category: { type: String, default: "slots" },
+  rtpMin: { type: Number, default: 85 },
+  rtpMax: { type: Number, default: 98 },
+  isHot: { type: Boolean, default: false },
+  isNew: { type: Boolean, default: true },
+  enabled: { type: Boolean, default: true },
+  order: { type: Number, default: 0 }
+}, { timestamps: true });
+const Game = mongoose.model("Game", GameSchema);
+
+// Admin credentials from env
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL || "admin@tipsmega888.com";
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "admin123";
+
+// Admin Auth Middleware
+const adminAuth = (req, res, next) => {
+  try {
+    const auth = String(req.headers.authorization || "");
+    const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+    if (!token) return res.status(401).json({ error: "No token" });
+
+    const decoded = jwt.verify(token, JWT_SECRET);
+    if (!decoded.isAdmin) return res.status(403).json({ error: "Not admin" });
+
+    req.adminUser = decoded;
+    next();
+  } catch (e) {
+    return res.status(401).json({ error: "Invalid token" });
+  }
+};
+
+// ADMIN: LOGIN
+app.post("/api/admin/login", (req, res) => {
+  try {
+    const { email, password } = req.body || {};
+
+    if (email === ADMIN_EMAIL && password === ADMIN_PASSWORD) {
+      const token = jwt.sign({ email, isAdmin: true, ts: Date.now() }, JWT_SECRET, { expiresIn: "24h" });
+      return res.json({ ok: true, token });
+    }
+
+    return res.status(401).json({ message: "Invalid credentials" });
+  } catch (e) {
+    return res.status(500).json({ error: "Login failed", detail: String(e.message) });
+  }
+});
+
+// ADMIN: DASHBOARD STATS
+app.get("/api/admin/stats", adminAuth, async (req, res) => {
+  try {
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+
+    const [totalUsers, totalGames, totalCompanies] = await Promise.all([
+      User.countDocuments(),
+      Game.countDocuments(),
+      Company.countDocuments()
+    ]);
+
+    // Active today (users who logged in today - simplified)
+    const activeToday = await User.countDocuments({ updatedAt: { $gte: todayStart } });
+
+    // Total scans
+    const totalScans = await ScanLog.countDocuments();
+
+    // Chat messages in 24h
+    const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const chatMessages24h = await ChatMessage.countDocuments({ createdAt: { $gte: yesterday } });
+
+    // Recent activity
+    const recentUsers = await User.find().sort({ createdAt: -1 }).limit(3);
+    const recentActivity = recentUsers.map(u => ({
+      type: "user",
+      message: `New user: ${u.username}`,
+      time: new Date(u.createdAt).toLocaleString()
+    }));
+
+    res.json({
+      stats: {
+        totalUsers,
+        activeToday,
+        totalScans,
+        totalGames,
+        totalCompanies,
+        chatMessages24h
+      },
+      recentActivity
+    });
+  } catch (e) {
+    res.status(500).json({ error: "Stats failed", detail: String(e.message) });
+  }
+});
+
+// ADMIN: GAMES CRUD
+app.get("/api/admin/games", adminAuth, async (req, res) => {
+  try {
+    const games = await Game.find().sort({ order: 1, createdAt: -1 });
+    res.json({ games });
+  } catch (e) {
+    res.status(500).json({ error: String(e.message) });
+  }
+});
+
+app.get("/api/admin/games/:id", adminAuth, async (req, res) => {
+  try {
+    const game = await Game.findById(req.params.id);
+    if (!game) return res.status(404).json({ error: "Game not found" });
+    res.json({ game });
+  } catch (e) {
+    res.status(500).json({ error: String(e.message) });
+  }
+});
+
+app.post("/api/admin/games", adminAuth, async (req, res) => {
+  try {
+    const { name, icon, category, rtpMin, rtpMax, isHot, isNew, enabled } = req.body;
+    const game = await Game.create({ name, icon, category, rtpMin, rtpMax, isHot, isNew, enabled });
+    res.json({ ok: true, game });
+  } catch (e) {
+    res.status(500).json({ error: String(e.message) });
+  }
+});
+
+app.put("/api/admin/games/:id", adminAuth, async (req, res) => {
+  try {
+    const game = await Game.findByIdAndUpdate(req.params.id, req.body, { new: true });
+    if (!game) return res.status(404).json({ error: "Game not found" });
+    res.json({ ok: true, game });
+  } catch (e) {
+    res.status(500).json({ error: String(e.message) });
+  }
+});
+
+app.delete("/api/admin/games/:id", adminAuth, async (req, res) => {
+  try {
+    await Game.findByIdAndDelete(req.params.id);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: String(e.message) });
+  }
+});
+
+// ADMIN: COMPANIES CRUD
+app.post("/api/admin/companies", adminAuth, async (req, res) => {
+  try {
+    const { name, caption, media, mediaType, link, priority } = req.body;
+    const company = await Company.create({
+      name,
+      caption,
+      storageUrl: media,
+      mediaType,
+      link,
+      priority
+    });
+    res.json({ ok: true, company });
+  } catch (e) {
+    res.status(500).json({ error: String(e.message) });
+  }
+});
+
+app.put("/api/admin/companies/:id", adminAuth, async (req, res) => {
+  try {
+    const { name, caption, media, mediaType, link, priority } = req.body;
+    const company = await Company.findByIdAndUpdate(
+      req.params.id,
+      { name, caption, storageUrl: media, mediaType, link, priority },
+      { new: true }
+    );
+    if (!company) return res.status(404).json({ error: "Company not found" });
+    res.json({ ok: true, company });
+  } catch (e) {
+    res.status(500).json({ error: String(e.message) });
+  }
+});
+
+app.delete("/api/admin/companies/:id", adminAuth, async (req, res) => {
+  try {
+    await Company.findByIdAndDelete(req.params.id);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: String(e.message) });
+  }
+});
+
+app.get("/api/companies/:id", async (req, res) => {
+  try {
+    const company = await Company.findById(req.params.id);
+    if (!company) return res.status(404).json({ error: "Company not found" });
+    res.json({ company: { ...company.toObject(), media: company.storageUrl } });
+  } catch (e) {
+    res.status(500).json({ error: String(e.message) });
+  }
+});
+
+// ADMIN: USERS MANAGEMENT
+app.get("/api/admin/users", adminAuth, async (req, res) => {
+  try {
+    const users = await User.find().sort({ createdAt: -1 }).select("-passHash -passSalt");
+    res.json({ users });
+  } catch (e) {
+    res.status(500).json({ error: String(e.message) });
+  }
+});
+
+app.get("/api/admin/users/:id", adminAuth, async (req, res) => {
+  try {
+    const user = await User.findById(req.params.id).select("-passHash -passSalt");
+    if (!user) return res.status(404).json({ error: "User not found" });
+    res.json({ user });
+  } catch (e) {
+    res.status(500).json({ error: String(e.message) });
+  }
+});
+
+app.put("/api/admin/users/:id/ban", adminAuth, async (req, res) => {
+  try {
+    const { isBanned } = req.body;
+    const user = await User.findByIdAndUpdate(req.params.id, { isBanned }, { new: true });
+    if (!user) return res.status(404).json({ error: "User not found" });
+    res.json({ ok: true, user });
+  } catch (e) {
+    res.status(500).json({ error: String(e.message) });
+  }
+});
+
+app.put("/api/admin/users/:id/stars", adminAuth, async (req, res) => {
+  try {
+    const { stars } = req.body;
+    const user = await User.findById(req.params.id);
+    if (!user) return res.status(404).json({ error: "User not found" });
+
+    user.bonusStars = (user.bonusStars || 0) + stars;
+    await user.save();
+
+    res.json({ ok: true, bonusStars: user.bonusStars });
+  } catch (e) {
+    res.status(500).json({ error: String(e.message) });
+  }
+});
+
+// ADMIN: CHAT MODERATION
+app.get("/api/admin/chat", adminAuth, async (req, res) => {
+  try {
+    const room = req.query.room || "global";
+    const query = room === "all" ? {} : { roomId: room };
+
+    const messages = await ChatMessage.find({ ...query, status: { $ne: "DELETED" } })
+      .sort({ createdAt: -1 })
+      .limit(100);
+
+    res.json({ messages: messages.reverse() });
+  } catch (e) {
+    res.status(500).json({ error: String(e.message) });
+  }
+});
+
+app.delete("/api/admin/chat/:id", adminAuth, async (req, res) => {
+  try {
+    const msg = await ChatMessage.findById(req.params.id);
+    if (!msg) return res.status(404).json({ error: "Message not found" });
+
+    msg.status = "DELETED";
+    msg.content = "[Deleted by Admin]";
+    msg.mediaUrl = null;
+    await msg.save();
+
+    // Notify clients
+    if (io) {
+      io.to(msg.roomId).emit("message_deleted", { messageId: req.params.id });
+    }
+
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: String(e.message) });
+  }
+});
+
+// PUBLIC: Get Games for Scan (used by frontend)
+app.get("/api/games", async (req, res) => {
+  try {
+    const games = await Game.find({ enabled: true }).sort({ order: 1 });
+    res.json({ games });
+  } catch (e) {
+    res.status(500).json({ error: String(e.message) });
+  }
+});
+
+// =======================
 // CRON: AUTO-CLEANUP (24H)
 // =======================
 cron.schedule("0 * * * *", async () => {
