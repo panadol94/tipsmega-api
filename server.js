@@ -570,6 +570,140 @@ bot.on("message", async (msg) => {
   }
 });
 
+// ===== BOT: /ADDMEDIA - Update company media (video/photo) ====
+const mediaWizard = {}; // { userId: { step, data } }
+
+bot.onText(/\/addmedia/, async (msg) => {
+  const userId = msg.from.id;
+  const chatId = msg.chat.id;
+  if (!(await isAdmin(userId))) return;
+
+  // List all companies for selection
+  const companies = await Company.find({ status: "ACTIVE" }).sort({ name: 1 });
+  if (!companies.length) {
+    return bot.sendMessage(chatId, "❌ Tiada company lagi. Guna /addcompany dulu.");
+  }
+
+  // Start wizard
+  mediaWizard[userId] = { step: 1, data: {} };
+
+  const companyList = companies.map((c, i) => `${i + 1}. ${c.name}`).join("\n");
+  return bot.sendMessage(
+    chatId,
+    `📋 *TAMBAH/UPDATE MEDIA*\n\nPilih company (taip nombor atau nama):\n\n${companyList}`,
+    { parse_mode: "Markdown" }
+  );
+});
+
+// Media Wizard Handler
+bot.on("message", async (msg) => {
+  if (!msg.text && !msg.photo && !msg.video) return;
+
+  const userId = msg.from.id;
+  const chatId = msg.chat.id;
+  const wizard = mediaWizard[userId];
+
+  if (!wizard) return;
+
+  // Step 1: Select company
+  if (wizard.step === 1 && msg.text) {
+    const input = msg.text.trim();
+
+    // Try parse as number
+    const num = parseInt(input);
+    let company;
+
+    if (!isNaN(num)) {
+      const companies = await Company.find({ status: "ACTIVE" }).sort({ name: 1 });
+      company = companies[num - 1];
+    } else {
+      // Search by name (case-insensitive)
+      company = await Company.findOne({
+        name: { $regex: new RegExp("^" + input + "$", "i") },
+        status: "ACTIVE"
+      });
+    }
+
+    if (!company) {
+      return bot.sendMessage(chatId, "❌ Company tak jumpa. Cuba lagi atau /addmedia untuk reset.");
+    }
+
+    wizard.data.companyId = company._id;
+    wizard.data.companyName = company.name;
+    wizard.step = 2;
+
+    return bot.sendMessage(
+      chatId,
+      `✅ Company: *${company.name}*\n\n📸 Hantar video atau gambar sekarang:`,
+      { parse_mode: "Markdown" }
+    );
+  }
+
+  // Step 2: Receive media
+  if (wizard.step === 2 && (msg.photo || msg.video)) {
+    try {
+      let fileId, mediaType, ext;
+
+      if (msg.photo) {
+        fileId = msg.photo[msg.photo.length - 1].file_id;
+        mediaType = "photo";
+        ext = "png";
+      } else {
+        fileId = msg.video.file_id;
+        mediaType = "video";
+        ext = "mp4";
+      }
+
+      const file = await bot.getFile(fileId);
+      const url = `https://api.telegram.org/file/bot${BOT_TOKEN}/${file.file_path}`;
+
+      // Download media
+      const response = await axios({ url, method: "GET", responseType: "arraybuffer" });
+
+      const safeName = wizard.data.companyName.replace(/[^\w\- ]+/g, "").trim();
+      const fileName = `${Date.now()}.${ext}`;
+      const uploadDir = path.join(__dirname, "public/uploads", safeName);
+      if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+
+      const localPath = path.join(uploadDir, fileName);
+
+      // Auto background removal for photos
+      if (mediaType === "photo") {
+        const imageBuffer = Buffer.from(response.data);
+        const blob = new Blob([imageBuffer]);
+        const resultBlob = await removeBackground(blob);
+        const resultBuffer = Buffer.from(await resultBlob.arrayBuffer());
+        fs.writeFileSync(localPath, resultBuffer);
+      } else {
+        // Video: save as-is
+        fs.writeFileSync(localPath, response.data);
+      }
+
+      const storageUrl = `/uploads/${safeName}/${fileName}`;
+
+      // Update company media
+      await Company.findByIdAndUpdate(wizard.data.companyId, {
+        mediaType,
+        storageUrl
+      });
+
+      delete mediaWizard[userId];
+
+      const bgNote = mediaType === "photo" ? " (Background auto-removed)" : "";
+      return bot.sendMessage(
+        chatId,
+        `✅ Media untuk *${wizard.data.companyName}* telah dikemaskini!${bgNote}\n\n🎬 Video akan auto-play di website!`,
+        { parse_mode: "Markdown" }
+      );
+    } catch (e) {
+      delete mediaWizard[userId];
+      return bot.sendMessage(chatId, `❌ Upload gagal: ${e.message}. Cuba /addmedia semula.`);
+    }
+  }
+});
+
+
+
 // =======================
 // DEBUG: DB CHECK
 // =======================
