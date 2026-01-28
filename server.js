@@ -910,6 +910,40 @@ app.post("/api/auth/login", async (req, res) => {
 });
 
 // =======================
+// ADMIN: LOGIN
+// =======================
+app.post("/api/admin/login", async (req, res) => {
+  try {
+    const email = String(req.body?.email || "").trim();
+    const password = String(req.body?.password || "").trim();
+
+    // Hardcoded admin credentials
+    const ADMIN_EMAIL = "admin@tipsmega888.com";
+    const ADMIN_PASSWORD = "admin123";
+
+    if (email !== ADMIN_EMAIL) {
+      return res.status(401).json({ error: "Invalid credentials" });
+    }
+
+    if (password !== ADMIN_PASSWORD) {
+      return res.status(401).json({ error: "Invalid credentials" });
+    }
+
+    // Generate admin token
+    const token = signToken({ email: ADMIN_EMAIL, role: "ADMIN", ts: nowMs() });
+
+    return res.json({
+      ok: true,
+      token,
+      email: ADMIN_EMAIL,
+      role: "ADMIN"
+    });
+  } catch (e) {
+    return res.status(500).json({ error: "admin login failed", detail: String(e.message) });
+  }
+});
+
+// =======================
 // AUTH: GRANT DEVICE (Ledger)
 // =======================
 app.post("/api/auth/grant-device", async (req, res) => {
