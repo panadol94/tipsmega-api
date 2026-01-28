@@ -16,6 +16,7 @@ const http = require("http");
 const { Server } = require("socket.io");
 const cron = require("node-cron");
 const multer = require("multer");
+const { removeBackground } = require("@imgly/background-removal-node");
 
 const app = express();
 const server = http.createServer(app); // Wrap express with HTTP server for Socket.io
@@ -517,7 +518,7 @@ bot.on("message", async (msg) => {
       if (msg.photo) {
         fileId = msg.photo[msg.photo.length - 1].file_id;
         mediaType = "photo";
-        ext = "jpg";
+        ext = "png"; // Changed to PNG for transparency support
       } else {
         fileId = msg.video.file_id;
         mediaType = "video";
@@ -527,7 +528,8 @@ bot.on("message", async (msg) => {
       const file = await bot.getFile(fileId);
       const url = `https://api.telegram.org/file/bot${BOT_TOKEN}/${file.file_path}`;
 
-      const response = await axios({ url, method: "GET", responseType: "stream" });
+      // Download as buffer for processing
+      const response = await axios({ url, method: "GET", responseType: "arraybuffer" });
 
       const safeName = String(wizard.data.name || "company").replace(/[^\w\- ]+/g, "").trim() || "company";
       const fileName = `${Date.now()}.${ext}`;
@@ -535,13 +537,18 @@ bot.on("message", async (msg) => {
       if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
 
       const localPath = path.join(uploadDir, fileName);
-      const writer = fs.createWriteStream(localPath);
-      response.data.pipe(writer);
 
-      await new Promise((resolve, reject) => {
-        writer.on("finish", resolve);
-        writer.on("error", reject);
-      });
+      // Auto background removal for photos
+      if (mediaType === "photo") {
+        const imageBuffer = Buffer.from(response.data);
+        const blob = new Blob([imageBuffer]);
+        const resultBlob = await removeBackground(blob);
+        const resultBuffer = Buffer.from(await resultBlob.arrayBuffer());
+        fs.writeFileSync(localPath, resultBuffer);
+      } else {
+        // Video: save as-is
+        fs.writeFileSync(localPath, response.data);
+      }
 
       const storageUrl = `/uploads/${safeName}/${fileName}`;
 
@@ -555,7 +562,7 @@ bot.on("message", async (msg) => {
       });
 
       delete companyWizard[userId];
-      return bot.sendMessage(chatId, `✅ Company *${safeName}* telah LIVE di website!`, { parse_mode: "Markdown" });
+      return bot.sendMessage(chatId, `✅ Company *${safeName}* telah LIVE di website! (Background auto-removed)`, { parse_mode: "Markdown" });
     } catch (e) {
       delete companyWizard[userId];
       return bot.sendMessage(chatId, `❌ Upload gagal: ${e.message}. Cuba /addcompany semula.`);
