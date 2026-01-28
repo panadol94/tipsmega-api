@@ -1,3 +1,5 @@
+/* eslint-disable @typescript-eslint/no-require-imports */
+/* eslint-disable @typescript-eslint/no-unused-vars */
 require("dotenv").config();
 
 const express = require("express");
@@ -7,7 +9,6 @@ const TelegramBot = require("node-telegram-bot-api");
 const axios = require("axios");
 const fs = require("fs");
 const path = require("path");
-const os = require("os");
 const crypto = require("crypto");
 const jwt = require("jsonwebtoken");
 
@@ -412,8 +413,11 @@ bot.onText(/\/delcompany (.+)/, async (msg, match) => {
 
   // Attempt to delete physical files
   try {
+
     const uploadDir = path.join(__dirname, "public/uploads", safeName);
+
     if (fs.existsSync(uploadDir)) {
+
       fs.rmSync(uploadDir, { recursive: true, force: true });
     }
   } catch (e) {
@@ -529,24 +533,32 @@ bot.on("message", async (msg) => {
       const url = `https://api.telegram.org/file/bot${BOT_TOKEN}/${file.file_path}`;
 
       // Download as buffer for processing
+
       const response = await axios({ url, method: "GET", responseType: "arraybuffer" });
 
       const safeName = String(wizard.data.name || "company").replace(/[^\w\- ]+/g, "").trim() || "company";
       const fileName = `${Date.now()}.${ext}`;
+
       const uploadDir = path.join(__dirname, "public/uploads", safeName);
+
       if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+
 
       const localPath = path.join(uploadDir, fileName);
 
       // Auto background removal for photos
       if (mediaType === "photo") {
         const imageBuffer = Buffer.from(response.data);
+
         const blob = new Blob([imageBuffer]);
+
         const resultBlob = await removeBackground(blob);
         const resultBuffer = Buffer.from(await resultBlob.arrayBuffer());
+
         fs.writeFileSync(localPath, resultBuffer);
       } else {
         // Video: save as-is
+
         fs.writeFileSync(localPath, response.data);
       }
 
@@ -658,24 +670,32 @@ bot.on("message", async (msg) => {
       const url = `https://api.telegram.org/file/bot${BOT_TOKEN}/${file.file_path}`;
 
       // Download media
+
       const response = await axios({ url, method: "GET", responseType: "arraybuffer" });
 
       const safeName = wizard.data.companyName.replace(/[^\w\- ]+/g, "").trim();
       const fileName = `${Date.now()}.${ext}`;
+
       const uploadDir = path.join(__dirname, "public/uploads", safeName);
+
       if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+
 
       const localPath = path.join(uploadDir, fileName);
 
       // Auto background removal for photos
       if (mediaType === "photo") {
         const imageBuffer = Buffer.from(response.data);
+
         const blob = new Blob([imageBuffer]);
+
         const resultBlob = await removeBackground(blob);
         const resultBuffer = Buffer.from(await resultBlob.arrayBuffer());
+
         fs.writeFileSync(localPath, resultBuffer);
       } else {
         // Video: save as-is
+
         fs.writeFileSync(localPath, response.data);
       }
 
@@ -743,7 +763,6 @@ app.post("/api/init", async (req, res) => {
       if (lastActive !== todayStr) {
         if (currentStars < DAILY_LIMIT) {
           currentStars = DAILY_LIMIT;
-          needsUpdate = true;
         } else {
           // still update date
           needsUpdate = true;
