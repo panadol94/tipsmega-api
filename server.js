@@ -1156,6 +1156,71 @@ app.post("/api/chat/upload", chatUpload.single("file"), (req, res) => {
   }
 });
 
+// =======================
+// ADMIN: MEDIA UPLOAD
+// =======================
+const adminStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const folder = req.body.folder || "uploads";
+    const uploadPath = path.join(__dirname, "public", folder);
+
+    // Create directory if doesn't exist
+    if (!fs.existsSync(uploadPath)) {
+      console.log("📂 Creating upload directory:", uploadPath);
+      fs.mkdirSync(uploadPath, { recursive: true });
+    }
+
+    cb(null, uploadPath);
+  },
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname);
+    const uniqueName = `${Date.now()}-${Math.random().toString(36).substring(7)}${ext}`;
+    cb(null, uniqueName);
+  }
+});
+
+const adminUpload = multer({
+  storage: adminStorage,
+  limits: {
+    fileSize: 50 * 1024 * 1024 // 50MB limit
+  },
+  fileFilter: (req, file, cb) => {
+    // Allow images and videos
+    const allowedMimes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'video/mp4', 'video/webm', 'video/quicktime'];
+    if (allowedMimes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Invalid file type. Only images and videos allowed.'));
+    }
+  }
+});
+
+app.post("/api/upload", adminUpload.single("file"), (req, res) => {
+  console.log("➡️ Admin Upload Request");
+  try {
+    if (!req.file) {
+      console.error("❌ No file in request");
+      return res.status(400).json({ error: "No file uploaded" });
+    }
+
+    const folder = req.body.folder || "uploads";
+    const fileUrl = `${req.protocol}://${req.get('host')}/${folder}/${req.file.filename}`;
+
+    console.log("✅ File uploaded:", req.file.filename, "URL:", fileUrl);
+
+    return res.json({
+      ok: true,
+      url: fileUrl,
+      filename: req.file.filename,
+      mimetype: req.file.mimetype,
+      size: req.file.size
+    });
+  } catch (e) {
+    console.error("❌ Upload error:", e);
+    return res.status(500).json({ error: "Upload failed", detail: String(e.message) });
+  }
+});
+
 app.post("/api/chat/react", async (req, res) => {
   try {
     const auth = String(req.headers.authorization || "");
