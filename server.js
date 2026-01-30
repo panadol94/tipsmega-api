@@ -1157,6 +1157,36 @@ app.post("/api/auth/grant-device", async (req, res) => {
 });
 
 // =======================
+// AUTH: CHECK PENDING BONUS
+// =======================
+app.get("/api/auth/check-pending", async (req, res) => {
+  try {
+    const auth = String(req.headers.authorization || "");
+    const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+    const payload = verifyToken(token);
+    const phone = normalizePhone(payload?.phone);
+
+    if (!phone) return res.status(401).json({ error: "Unauthorized" });
+
+    const user = await User.findOne({ phone });
+    if (!user) return res.status(404).json({ error: "User not found" });
+
+    const totalBonus = user.bonusStars || 0;
+    const totalClaimed = user.totalClaimedStars || 0;
+    const pending = totalBonus - totalClaimed;
+
+    return res.json({
+      ok: true,
+      pending,
+      totalBonus,
+      totalClaimed
+    });
+  } catch (e) {
+    return res.status(500).json({ error: "Check failed", detail: String(e.message) });
+  }
+});
+
+// =======================
 // AUTH: ME
 // =======================
 app.get("/api/auth/me", async (req, res) => {
