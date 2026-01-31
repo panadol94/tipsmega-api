@@ -1089,7 +1089,8 @@ app.post("/api/auth/login", async (req, res) => {
 // =======================
 // ADMIN: LOGIN
 // =======================
-app.post("/api/admin/login", async (req, res) => {
+// Public Admin Login (for bot access)
+app.post("/api/admin/login-bot", async (req, res) => {
   try {
     const email = String(req.body?.email || "").trim();
     const password = String(req.body?.password || "").trim();
@@ -1106,8 +1107,8 @@ app.post("/api/admin/login", async (req, res) => {
       return res.status(401).json({ error: "Invalid credentials" });
     }
 
-    // Generate admin token
-    const token = signToken({ email: ADMIN_EMAIL, role: "ADMIN", ts: nowMs() });
+    // Generate admin token using JWT (matching adminAuth middleware)
+    const token = jwt.sign({ email: ADMIN_EMAIL, role: "ADMIN", isAdmin: true, ts: Date.now() }, JWT_SECRET, { expiresIn: "24h" });
 
     return res.json({
       ok: true,
