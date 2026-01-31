@@ -1910,6 +1910,44 @@ app.get("/api/games", async (req, res) => {
   }
 });
 
+// ADMIN: Seed sample games (one-time use)
+app.post("/api/admin/seed-games", adminAuth, async (req, res) => {
+  try {
+    const existingCount = await Game.countDocuments();
+    if (existingCount > 0) {
+      return res.json({ ok: false, message: `Games already exist (${existingCount}). Delete first to re-seed.` });
+    }
+
+    const SAMPLE_GAMES = [
+      { name: "Great Blue", icon: "🐋", category: "slots", rtpMin: 92, rtpMax: 96, isHot: true, order: 1 },
+      { name: "Highway Kings", icon: "🚛", category: "slots", rtpMin: 90, rtpMax: 95, isHot: true, order: 2 },
+      { name: "Safari Heat", icon: "🦁", category: "slots", rtpMin: 91, rtpMax: 97, isHot: false, order: 3 },
+      { name: "Dolphin Reef", icon: "🐬", category: "slots", rtpMin: 89, rtpMax: 96, isHot: true, order: 4 },
+      { name: "Panther Moon", icon: "🐆", category: "slots", rtpMin: 88, rtpMax: 95, isHot: false, order: 5 },
+      { name: "Bonus Bears", icon: "🐻", category: "slots", rtpMin: 90, rtpMax: 98, isHot: true, order: 6 },
+      { name: "Wukong", icon: "🐒", category: "slots", rtpMin: 91, rtpMax: 97, isNew: true, order: 7 },
+      { name: "Captain Treasure", icon: "🏴‍☠️", category: "slots", rtpMin: 87, rtpMax: 94, isHot: false, order: 8 },
+      { name: "Golden Tour", icon: "⛳", category: "slots", rtpMin: 89, rtpMax: 95, isHot: false, order: 9 },
+      { name: "Irish Luck", icon: "☘️", category: "slots", rtpMin: 90, rtpMax: 96, isHot: false, order: 10 },
+      { name: "Jin Qian Wa", icon: "🧧", category: "slots", rtpMin: 92, rtpMax: 98, isHot: true, isNew: true, order: 11 },
+      { name: "Koi Gate", icon: "🐟", category: "slots", rtpMin: 88, rtpMax: 95, isHot: false, order: 12 },
+      { name: "Lucky Koi", icon: "🎏", category: "slots", rtpMin: 89, rtpMax: 96, isHot: false, order: 13 },
+      { name: "Mayan Gold", icon: "🏛️", category: "slots", rtpMin: 90, rtpMax: 97, isHot: false, order: 14 },
+      { name: "Money Tree", icon: "🌳", category: "slots", rtpMin: 91, rtpMax: 98, isHot: true, order: 15 },
+      { name: "Ocean Paradise", icon: "🌊", category: "slots", rtpMin: 88, rtpMax: 95, isHot: false, order: 16 },
+      { name: "Queen Of Egypt", icon: "👸", category: "slots", rtpMin: 89, rtpMax: 96, isHot: false, order: 17 },
+      { name: "Three Kingdom", icon: "⚔️", category: "slots", rtpMin: 90, rtpMax: 97, isHot: true, order: 18 },
+      { name: "Thunder God", icon: "⚡", category: "slots", rtpMin: 91, rtpMax: 98, isNew: true, order: 19 },
+      { name: "Wild Giant Panda", icon: "🐼", category: "slots", rtpMin: 92, rtpMax: 97, isHot: true, order: 20 },
+    ];
+
+    await Game.insertMany(SAMPLE_GAMES);
+    res.json({ ok: true, message: `Seeded ${SAMPLE_GAMES.length} games successfully!` });
+  } catch (e) {
+    res.status(500).json({ error: String(e.message) });
+  }
+});
+
 // =======================
 // CRON: AUTO-CLEANUP (24H)
 // =======================
