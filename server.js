@@ -1060,6 +1060,9 @@ app.post("/api/auth/login", async (req, res) => {
     const user = await User.findOne({ username });
     if (!user) return res.status(404).json({ error: "Username not found" });
 
+    // Check if user is banned
+    if (user.isBanned) return res.status(403).json({ error: "Akaun anda telah disekat. Hubungi admin." });
+
     if (!user.verified) return res.status(403).json({ error: "Not verified" });
 
     const computed = passwordHash(password, user.passSalt);
