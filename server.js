@@ -231,7 +231,7 @@ function makeSalt() {
 
 function signToken(payloadObj) {
   const payload = Buffer.from(JSON.stringify(payloadObj), "utf8").toString("base64url");
-  const sig = crypto.createHmac("sha256", AUTH_SECRET).update(payload).digest("base64url");
+  const sig = crypto.createHmac("sha256", JWT_SECRET).update(payload).digest("base64url");
   return `${payload}.${sig}`;
 }
 
@@ -240,7 +240,7 @@ function verifyToken(token) {
     const parts = String(token || "").split(".");
     if (parts.length !== 2) return null;
     const [payload, sig] = parts;
-    const expected = crypto.createHmac("sha256", AUTH_SECRET).update(payload).digest("base64url");
+    const expected = crypto.createHmac("sha256", JWT_SECRET).update(payload).digest("base64url");
     if (sig !== expected) return null;
     const obj = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
     return obj || null;
