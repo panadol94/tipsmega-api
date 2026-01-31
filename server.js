@@ -2129,6 +2129,16 @@ app.post("/api/admin/seed", adminAuth, async (req, res) => {
   }
 });
 
+// PUBLIC: Version Check (to verify deployment)
+app.get("/api/version", (req, res) => {
+  res.json({
+    version: "2.0.0",
+    deployed: new Date().toISOString(),
+    features: ["admin-panel", "seed-endpoint", "jwt-auth-fixed"],
+    commit: "720b1cc"
+  });
+});
+
 // PUBLIC: Get Games for Scan (used by frontend)
 app.get("/api/games", async (req, res) => {
   try {
