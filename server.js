@@ -31,6 +31,7 @@ const GROUP_USER_JOIN = process.env.TG_GROUP_USER_JOIN; // -100...
 const GROUP_ADMIN_REPORT = process.env.TG_GROUP_ADMIN_REPORT; // -100...
 const ADMIN_GROUP_ID = process.env.ADMIN_GROUP_ID || GROUP_ADMIN_REPORT;
 const AUTH_SECRET = process.env.AUTH_SECRET || "CHANGE_ME_AUTH_SECRET";
+const JWT_SECRET = process.env.JWT_SECRET || AUTH_SECRET; // Admin panel authentication
 const MONGO_URL = process.env.MONGO_URL || "mongodb://root:example@localhost:27017";
 
 const DAILY_LIMIT = 5;
