@@ -1,6 +1,20 @@
 version: "3.8"
 
 services:
+  mongodb:
+    image: mongo:7
+    container_name: tipsmega-mongodb
+    restart: always
+    ports:
+      - "27017:27017"
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=root
+      - MONGO_INITDB_ROOT_PASSWORD=example
+    volumes:
+      - mongodb_data:/data/db # Persistent storage - data won't be lost on redeploy!
+    networks:
+      - tipsmega-network
+
   api-mini:
     build: .
     container_name: tipsmega-bot
@@ -17,8 +31,21 @@ services:
       - ADMIN_GROUP_ID=${ADMIN_GROUP_ID}
       # Security
       - AUTH_SECRET=${AUTH_SECRET}
-      # Database
-      - MONGO_URL=${MONGO_URL}
+      # Database - now pointing to internal MongoDB service
+      - MONGO_URL=mongodb://root:example@mongodb:27017/tipsmega?authSource=admin
     volumes:
       - ./public/uploads:/app/public/uploads
       - ./.env:/app/.env
+    depends_on:
+      - mongodb
+    networks:
+      - tipsmega-network
+
+# Named volume = persistent across redeploys!
+volumes:
+  mongodb_data:
+    driver: local
+
+networks:
+  tipsmega-network:
+    driver: bridge
