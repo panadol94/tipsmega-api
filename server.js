@@ -2059,6 +2059,76 @@ app.put("/api/admin/settings/banned-words", adminAuth, async (req, res) => {
   }
 });
 
+// ADMIN: Seed Sample Data
+app.post("/api/admin/seed", adminAuth, async (req, res) => {
+  try {
+    const results = { games: 0, companies: 0, users: 0 };
+
+    // Sample games
+    const GAMES = [
+      { name: "Great Blue", icon: "🐋", category: "slots", rtpMin: 92, rtpMax: 96, isHot: true, order: 1 },
+      { name: "Highway Kings", icon: "🚛", category: "slots", rtpMin: 90, rtpMax: 95, isHot: true, order: 2 },
+      { name: "Safari Heat", icon: "🦁", category: "slots", rtpMin: 91, rtpMax: 97, order: 3 },
+      { name: "Dolphin Reef", icon: "🐬", category: "slots", rtpMin: 89, rtpMax: 96, isHot: true, order: 4 },
+      { name: "Panther Moon", icon: "🐆", category: "slots", rtpMin: 88, rtpMax: 95, order: 5 },
+      { name: "Bonus Bears", icon: "🐻", category: "slots", rtpMin: 90, rtpMax: 98, isHot: true, order: 6 },
+      { name: "Wukong", icon: "🐒", category: "slots", rtpMin: 91, rtpMax: 97, isNew: true, order: 7 },
+      { name: "Captain Treasure", icon: "🏴‍☠️", category: "slots", rtpMin: 87, rtpMax: 94, order: 8 },
+      { name: "Golden Tour", icon: "⛳", category: "slots", rtpMin: 89, rtpMax: 95, order: 9 },
+      { name: "Irish Luck", icon: "☘️", category: "slots", rtpMin: 90, rtpMax: 96, order: 10 },
+      { name: "Jin Qian Wa", icon: "🧧", category: "slots", rtpMin: 92, rtpMax: 98, isHot: true, isNew: true, order: 11 },
+      { name: "Koi Gate", icon: "🐟", category: "slots", rtpMin: 88, rtpMax: 95, order: 12 },
+      { name: "Lucky Koi", icon: "🎏", category: "slots", rtpMin: 89, rtpMax: 96, order: 13 },
+      { name: "Mayan Gold", icon: "🏛️", category: "slots", rtpMin: 90, rtpMax: 97, order: 14 },
+      { name: "Money Tree", icon: "🌳", category: "slots", rtpMin: 91, rtpMax: 98, isHot: true, order: 15 },
+      { name: "Ocean Paradise", icon: "🌊", category: "slots", rtpMin: 88, rtpMax: 95, order: 16 },
+      { name: "Queen Of Egypt", icon: "👸", category: "slots", rtpMin: 89, rtpMax: 96, order: 17 },
+      { name: "Three Kingdom", icon: "⚔️", category: "slots", rtpMin: 90, rtpMax: 97, isHot: true, order: 18 },
+      { name: "Thunder God", icon: "⚡", category: "slots", rtpMin: 91, rtpMax: 98, isNew: true, order: 19 },
+      { name: "Wild Giant Panda", icon: "🐼", category: "slots", rtpMin: 92, rtpMax: 97, isHot: true, order: 20 },
+    ];
+
+    // Sample companies
+    const COMPANIES = [
+      { name: "Mega888", website: "https://mega888.com", contact: "@mega888official" },
+      { name: "Pussy888", website: "https://pussy888.com", contact: "@pussy888support" },
+      { name: "918Kiss", website: "https://918kiss.com", contact: "@918kiss" },
+      { name: "XE88", website: "https://xe88.com", contact: "@xe88official" },
+      { name: "Joker123", website: "https://joker123.net", contact: "@joker123" },
+    ];
+
+    // Seed games if empty
+    const gamesCount = await Game.countDocuments();
+    if (gamesCount === 0) {
+      await Game.insertMany(GAMES);
+      results.games = GAMES.length;
+    }
+
+    // Seed companies if empty
+    const companiesCount = await Company.countDocuments();
+    if (companiesCount === 0) {
+      await Company.insertMany(COMPANIES);
+      results.companies = COMPANIES.length;
+    }
+
+    // Seed a few users if empty
+    const usersCount = await User.countDocuments();
+    if (usersCount === 0) {
+      const sampleUsers = [
+        { username: "TestUser1", telegramId: "test1", stars: 5, lastActive: new Date() },
+        { username: "TestUser2", telegramId: "test2", stars: 10, lastActive: new Date() },
+        { username: "TestUser3", telegramId: "test3", stars: 3, lastActive: new Date() },
+      ];
+      await User.insertMany(sampleUsers);
+      results.users = sampleUsers.length;
+    }
+
+    res.json({ ok: true, seeded: results });
+  } catch (e) {
+    res.status(500).json({ error: String(e.message) });
+  }
+});
+
 // PUBLIC: Get Games for Scan (used by frontend)
 app.get("/api/games", async (req, res) => {
   try {
