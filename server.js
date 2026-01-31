@@ -1125,8 +1125,6 @@ app.post("/api/admin/login-bot", async (req, res) => {
 // AUTH: GRANT DEVICE (Ledger)
 // =======================
 app.post("/api/auth/grant-device", async (req, res) => {
-  const session = await mongoose.startSession();
-  session.startTransaction();
   try {
     const auth = String(req.headers.authorization || "");
     const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
@@ -1136,10 +1134,10 @@ app.post("/api/auth/grant-device", async (req, res) => {
 
     if (!phone || !deviceId) throw new Error("Auth/DeviceID missing");
 
-    const user = await User.findOne({ phone }).session(session);
+    const user = await User.findOne({ phone });
     if (!user) throw new Error("User not found");
 
-    let device = await Device.findOne({ deviceId }).session(session);
+    let device = await Device.findOne({ deviceId });
     if (!device) throw new Error("Device not initialized");
 
     const totalBonus = user.bonusStars || 0;
@@ -1154,22 +1152,18 @@ app.post("/api/auth/grant-device", async (req, res) => {
       user.bonusGranted = true;
       user.bonusDeviceId = deviceId;
 
+      // Save both documents (no transaction needed for this simple operation)
+      await user.save();
+      await device.save();
+
       out = { ok: true, stars: device.stars, granted: true, bonusStars: pending, msg: `Claimed ${pending} new stars!` };
     } else {
       out = { ok: true, stars: device.stars, granted: false, bonusStars: 0, msg: "No new stars" };
     }
 
-    await user.save({ session });
-    await device.save({ session });
-
-    await session.commitTransaction();
-    session.endSession();
-
     return res.json(out);
 
   } catch (e) {
-    await session.abortTransaction();
-    session.endSession();
     return res.status(500).json({ error: "grant failed", detail: String(e.message) });
   }
 });
