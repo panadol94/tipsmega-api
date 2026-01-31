@@ -2415,5 +2415,326 @@ app.put("/api/admin/users/:id/stars", verifyAdminToken, async (req, res) => {
   }
 });
 
+// =======================
+// ADMIN: Dashboard Stats
+// =======================
+app.get("/api/admin/stats", verifyAdminToken, async (req, res) => {
+  try {
+    const totalUsers = await User.countDocuments();
+    const totalDevices = await Device.countDocuments();
+    const totalGames = await Game.countDocuments();
+    const totalCompanies = await Company.countDocuments();
+    const totalMessages = await ChatMessage.countDocuments();
+    const bannedUsers = await User.countDocuments({ isBanned: true });
+    const activeUsers = await User.countDocuments({ isBanned: { $ne: true } });
+    const totalScans = await ScanLog.countDocuments();
+
+    // Recent activity
+    const recentUsers = await User.find({}).sort({ createdAt: -1 }).limit(5).select("username phone createdAt");
+    const recentScans = await ScanLog.find({}).sort({ createdAt: -1 }).limit(5);
+
+    return res.json({
+      stats: {
+        totalUsers,
+        activeUsers,
+        bannedUsers,
+        totalDevices,
+        totalGames,
+        totalCompanies,
+        totalMessages,
+        totalScans
+      },
+      recentUsers,
+      recentScans
+    });
+  } catch (e) {
+    return res.status(500).json({ error: "Failed to fetch stats", detail: String(e.message) });
+  }
+});
+
+// =======================
+// ADMIN: Settings CRUD
+// =======================
+app.get("/api/admin/settings", verifyAdminToken, async (req, res) => {
+  try {
+    let settings = await AdminSettings.findOne({ key: "main" });
+    if (!settings) {
+      settings = await AdminSettings.create({ key: "main" });
+    }
+    return res.json({ settings });
+  } catch (e) {
+    return res.status(500).json({ error: "Failed to fetch settings", detail: String(e.message) });
+  }
+});
+
+app.put("/api/admin/settings", verifyAdminToken, async (req, res) => {
+  try {
+    const updates = req.body;
+    delete updates.key; // Prevent changing the key
+    updates.updatedBy = req.adminUser?.email || "admin";
+
+    const settings = await AdminSettings.findOneAndUpdate(
+      { key: "main" },
+      updates,
+      { new: true, upsert: true }
+    );
+    return res.json({ ok: true, settings });
+  } catch (e) {
+    return res.status(500).json({ error: "Failed to update settings", detail: String(e.message) });
+  }
+});
+
+app.post("/api/admin/settings/clear-chat", verifyAdminToken, async (req, res) => {
+  try {
+    const result = await ChatMessage.deleteMany({});
+    return res.json({ ok: true, deleted: result.deletedCount });
+  } catch (e) {
+    return res.status(500).json({ error: "Failed to clear chat", detail: String(e.message) });
+  }
+});
+
+app.post("/api/admin/settings/reset-games", verifyAdminToken, async (req, res) => {
+  try {
+    const result = await Game.deleteMany({});
+    return res.json({ ok: true, deleted: result.deletedCount });
+  } catch (e) {
+    return res.status(500).json({ error: "Failed to reset games", detail: String(e.message) });
+  }
+});
+
+app.get("/api/admin/settings/banned-words", verifyAdminToken, async (req, res) => {
+  try {
+    let settings = await AdminSettings.findOne({ key: "main" });
+    return res.json({ bannedWords: settings?.bannedWords || [] });
+  } catch (e) {
+    return res.status(500).json({ error: "Failed to fetch banned words", detail: String(e.message) });
+  }
+});
+
+app.put("/api/admin/settings/banned-words", verifyAdminToken, async (req, res) => {
+  try {
+    const { bannedWords } = req.body;
+    const settings = await AdminSettings.findOneAndUpdate(
+      { key: "main" },
+      { bannedWords: Array.isArray(bannedWords) ? bannedWords : [] },
+      { new: true, upsert: true }
+    );
+    return res.json({ ok: true, bannedWords: settings.bannedWords });
+  } catch (e) {
+    return res.status(500).json({ error: "Failed to update banned words", detail: String(e.message) });
+  }
+});
+
+// =======================
+// ADMIN: Games CRUD
+// =======================
+app.get("/api/admin/games", verifyAdminToken, async (req, res) => {
+  try {
+    const games = await Game.find({}).sort({ name: 1 });
+    return res.json({ games });
+  } catch (e) {
+    return res.status(500).json({ error: "Failed to fetch games", detail: String(e.message) });
+  }
+});
+
+app.post("/api/admin/games", verifyAdminToken, async (req, res) => {
+  try {
+    const { name, rtp, category, status, image } = req.body;
+    if (!name) return res.status(400).json({ error: "Name required" });
+
+    const game = await Game.create({ name, rtp, category, status, image });
+    return res.json({ ok: true, game });
+  } catch (e) {
+    if (e.code === 11000) return res.status(400).json({ error: "Game already exists" });
+    return res.status(500).json({ error: "Failed to create game", detail: String(e.message) });
+  }
+});
+
+app.get("/api/admin/games/:id", verifyAdminToken, async (req, res) => {
+  try {
+    const game = await Game.findById(req.params.id);
+    if (!game) return res.status(404).json({ error: "Game not found" });
+    return res.json({ game });
+  } catch (e) {
+    return res.status(500).json({ error: "Failed to fetch game", detail: String(e.message) });
+  }
+});
+
+app.put("/api/admin/games/:id", verifyAdminToken, async (req, res) => {
+  try {
+    const updates = req.body;
+    const game = await Game.findByIdAndUpdate(req.params.id, updates, { new: true });
+    if (!game) return res.status(404).json({ error: "Game not found" });
+    return res.json({ ok: true, game });
+  } catch (e) {
+    return res.status(500).json({ error: "Failed to update game", detail: String(e.message) });
+  }
+});
+
+app.delete("/api/admin/games/:id", verifyAdminToken, async (req, res) => {
+  try {
+    const game = await Game.findByIdAndDelete(req.params.id);
+    if (!game) return res.status(404).json({ error: "Game not found" });
+    return res.json({ ok: true });
+  } catch (e) {
+    return res.status(500).json({ error: "Failed to delete game", detail: String(e.message) });
+  }
+});
+
+app.post("/api/admin/games/import", verifyAdminToken, async (req, res) => {
+  try {
+    const { games } = req.body; // Array of game objects
+    if (!Array.isArray(games)) return res.status(400).json({ error: "Games array required" });
+
+    let created = 0, skipped = 0;
+    for (const g of games) {
+      try {
+        await Game.create({ name: g.name, rtp: g.rtp || 96, category: g.category, status: g.status || "ACTIVE" });
+        created++;
+      } catch (e) {
+        skipped++; // Duplicate or error
+      }
+    }
+    return res.json({ ok: true, created, skipped });
+  } catch (e) {
+    return res.status(500).json({ error: "Failed to import games", detail: String(e.message) });
+  }
+});
+
+app.post("/api/admin/games/sync-from-txt", verifyAdminToken, async (req, res) => {
+  try {
+    const { gameList } = req.body; // Newline separated game names
+    if (!gameList) return res.status(400).json({ error: "gameList required" });
+
+    const names = gameList.split("\n").map(n => n.trim()).filter(n => n);
+    let created = 0, skipped = 0;
+
+    for (const name of names) {
+      try {
+        await Game.create({ name, rtp: 96, status: "ACTIVE" });
+        created++;
+      } catch (e) {
+        skipped++;
+      }
+    }
+    return res.json({ ok: true, created, skipped, total: names.length });
+  } catch (e) {
+    return res.status(500).json({ error: "Failed to sync games", detail: String(e.message) });
+  }
+});
+
+app.put("/api/admin/games/bulk", verifyAdminToken, async (req, res) => {
+  try {
+    const { ids, updates } = req.body;
+    if (!Array.isArray(ids)) return res.status(400).json({ error: "IDs array required" });
+
+    const result = await Game.updateMany(
+      { _id: { $in: ids } },
+      updates
+    );
+    return res.json({ ok: true, modified: result.modifiedCount });
+  } catch (e) {
+    return res.status(500).json({ error: "Failed to bulk update", detail: String(e.message) });
+  }
+});
+
+// =======================
+// ADMIN: Companies CRUD
+// =======================
+app.post("/api/admin/companies", verifyAdminToken, async (req, res) => {
+  try {
+    const { name, link, caption, status, mediaType, storageUrl } = req.body;
+    if (!name) return res.status(400).json({ error: "Name required" });
+
+    const company = await Company.create({ name, link, caption, status, mediaType, storageUrl });
+    return res.json({ ok: true, company });
+  } catch (e) {
+    if (e.code === 11000) return res.status(400).json({ error: "Company already exists" });
+    return res.status(500).json({ error: "Failed to create company", detail: String(e.message) });
+  }
+});
+
+app.put("/api/admin/companies/:id", verifyAdminToken, async (req, res) => {
+  try {
+    const updates = req.body;
+    const company = await Company.findByIdAndUpdate(req.params.id, updates, { new: true });
+    if (!company) return res.status(404).json({ error: "Company not found" });
+    return res.json({ ok: true, company });
+  } catch (e) {
+    return res.status(500).json({ error: "Failed to update company", detail: String(e.message) });
+  }
+});
+
+app.delete("/api/admin/companies/:id", verifyAdminToken, async (req, res) => {
+  try {
+    const company = await Company.findByIdAndDelete(req.params.id);
+    if (!company) return res.status(404).json({ error: "Company not found" });
+    return res.json({ ok: true });
+  } catch (e) {
+    return res.status(500).json({ error: "Failed to delete company", detail: String(e.message) });
+  }
+});
+
+// =======================
+// ADMIN: Chat Moderation
+// =======================
+app.get("/api/admin/chat", verifyAdminToken, async (req, res) => {
+  try {
+    const { room } = req.query;
+    const filter = room && room !== "all" ? { roomId: room } : {};
+    const messages = await ChatMessage.find(filter).sort({ createdAt: -1 }).limit(100);
+    return res.json({ messages });
+  } catch (e) {
+    return res.status(500).json({ error: "Failed to fetch messages", detail: String(e.message) });
+  }
+});
+
+app.delete("/api/admin/chat/:id", verifyAdminToken, async (req, res) => {
+  try {
+    const msg = await ChatMessage.findByIdAndDelete(req.params.id);
+    if (!msg) return res.status(404).json({ error: "Message not found" });
+    return res.json({ ok: true });
+  } catch (e) {
+    return res.status(500).json({ error: "Failed to delete message", detail: String(e.message) });
+  }
+});
+
+app.post("/api/admin/chat/announce", verifyAdminToken, async (req, res) => {
+  try {
+    const { content, roomId } = req.body;
+    if (!content) return res.status(400).json({ error: "Content required" });
+
+    const msg = await ChatMessage.create({
+      roomId: roomId || "global",
+      sender: "SYSTEM",
+      senderLevel: "ADMIN",
+      content,
+      status: "ACTIVE"
+    });
+
+    // Emit via Socket.io if available
+    if (global.io) {
+      global.io.to(roomId || "global").emit("chat:message", msg);
+    }
+
+    return res.json({ ok: true, message: msg });
+  } catch (e) {
+    return res.status(500).json({ error: "Failed to send announcement", detail: String(e.message) });
+  }
+});
+
+app.post("/api/admin/chat/clear-old", verifyAdminToken, async (req, res) => {
+  try {
+    const { days } = req.body;
+    const daysAgo = Number(days) || 7;
+    const cutoff = new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000);
+
+    const result = await ChatMessage.deleteMany({ createdAt: { $lt: cutoff } });
+    return res.json({ ok: true, deleted: result.deletedCount });
+  } catch (e) {
+    return res.status(500).json({ error: "Failed to clear old messages", detail: String(e.message) });
+  }
+});
+
 // CRITICAL: Change app.listen to server.listen for Socket.io
 server.listen(PORT, "0.0.0.0", () => console.log("API (Socket+Cron) running on port " + PORT));
