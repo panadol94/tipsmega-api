@@ -166,6 +166,22 @@ const ChatGroupSchema = new mongoose.Schema({
 }, { timestamps: true });
 const ChatGroup = mongoose.model("ChatGroup", ChatGroupSchema);
 
+// 11. Admin Settings (for admin panel configuration)
+const AdminSettingsSchema = new mongoose.Schema({
+  key: { type: String, required: true, unique: true, default: "main" },
+  siteName: { type: String, default: "TipsMega888" },
+  enableChat: { type: Boolean, default: true },
+  enableScanner: { type: Boolean, default: true },
+  enableRegistration: { type: Boolean, default: true },
+  maintenanceMode: { type: Boolean, default: false },
+  rtpMin: { type: Number, default: 85 },
+  rtpMax: { type: Number, default: 98 },
+  gamesPerScan: { type: Number, default: 10 },
+  bannedWords: [String],
+  updatedBy: String
+}, { timestamps: true });
+const AdminSettings = mongoose.model("AdminSettings", AdminSettingsSchema);
+
 
 // ===== HELPERS =====
 
@@ -1895,6 +1911,149 @@ app.delete("/api/admin/chat/:id", adminAuth, async (req, res) => {
     }
 
     res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: String(e.message) });
+  }
+});
+
+// ADMIN: SETTINGS MANAGEMENT
+app.get("/api/admin/settings", adminAuth, async (req, res) => {
+  try {
+    let settings = await AdminSettings.findOne({ key: "main" });
+    if (!settings) {
+      // Create default settings if not exists
+      settings = await AdminSettings.create({ key: "main" });
+    }
+    res.json({ settings });
+  } catch (e) {
+    res.status(500).json({ error: String(e.message) });
+  }
+});
+
+app.put("/api/admin/settings", adminAuth, async (req, res) => {
+  try {
+    const {
+      siteName,
+      enableChat,
+      enableScanner,
+      enableRegistration,
+      maintenanceMode,
+      rtpMin,
+      rtpMax,
+      gamesPerScan,
+      bannedWords
+    } = req.body;
+
+    const settings = await AdminSettings.findOneAndUpdate(
+      { key: "main" },
+      {
+        siteName,
+        enableChat,
+        enableScanner,
+        enableRegistration,
+        maintenanceMode,
+        rtpMin,
+        rtpMax,
+        gamesPerScan,
+        bannedWords,
+        updatedBy: req.adminUser?.email || "admin"
+      },
+      { new: true, upsert: true }
+    );
+
+    res.json({ ok: true, settings });
+  } catch (e) {
+    res.status(500).json({ error: String(e.message) });
+  }
+});
+
+// ADMIN: DANGER ZONE - Clear All Chat
+app.post("/api/admin/settings/clear-chat", adminAuth, async (req, res) => {
+  try {
+    const result = await ChatMessage.updateMany(
+      { status: "ACTIVE" },
+      { status: "DELETED", content: "[Cleared by Admin]", mediaUrl: null }
+    );
+
+    // Notify all connected clients
+    if (io) {
+      io.emit("chat_cleared", { timestamp: Date.now() });
+    }
+
+    res.json({ ok: true, deleted: result.modifiedCount });
+  } catch (e) {
+    res.status(500).json({ error: String(e.message) });
+  }
+});
+
+// ADMIN: DANGER ZONE - Reset All Games
+app.post("/api/admin/settings/reset-games", adminAuth, async (req, res) => {
+  try {
+    const result = await Game.deleteMany({});
+    res.json({ ok: true, deleted: result.deletedCount });
+  } catch (e) {
+    res.status(500).json({ error: String(e.message) });
+  }
+});
+
+// ADMIN: Clear Old Chat Messages (7+ days)
+app.post("/api/admin/chat/clear-old", adminAuth, async (req, res) => {
+  try {
+    const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000); // 7 days ago
+    const result = await ChatMessage.updateMany(
+      { createdAt: { $lt: cutoff }, status: "ACTIVE" },
+      { status: "EXPIRED", content: "[Expired]", mediaUrl: null }
+    );
+    res.json({ ok: true, cleared: result.modifiedCount });
+  } catch (e) {
+    res.status(500).json({ error: String(e.message) });
+  }
+});
+
+// ADMIN: Send Announcement
+app.post("/api/admin/chat/announce", adminAuth, async (req, res) => {
+  try {
+    const { message } = req.body;
+    if (!message) return res.status(400).json({ error: "Message required" });
+
+    const announcement = await ChatMessage.create({
+      roomId: "global",
+      sender: "📢 Admin",
+      senderLevel: "ADMIN",
+      content: message,
+      status: "ACTIVE"
+    });
+
+    // Broadcast to all connected clients
+    if (io) {
+      io.to("global").emit("new_message", announcement);
+    }
+
+    res.json({ ok: true, announcement });
+  } catch (e) {
+    res.status(500).json({ error: String(e.message) });
+  }
+});
+
+// ADMIN: Banned Words Management
+app.get("/api/admin/settings/banned-words", adminAuth, async (req, res) => {
+  try {
+    const settings = await AdminSettings.findOne({ key: "main" });
+    res.json({ bannedWords: settings?.bannedWords || [] });
+  } catch (e) {
+    res.status(500).json({ error: String(e.message) });
+  }
+});
+
+app.put("/api/admin/settings/banned-words", adminAuth, async (req, res) => {
+  try {
+    const { bannedWords } = req.body;
+    const settings = await AdminSettings.findOneAndUpdate(
+      { key: "main" },
+      { bannedWords },
+      { new: true, upsert: true }
+    );
+    res.json({ ok: true, bannedWords: settings.bannedWords });
   } catch (e) {
     res.status(500).json({ error: String(e.message) });
   }
