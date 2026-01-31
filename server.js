@@ -81,6 +81,7 @@ const UserSchema = new mongoose.Schema({
   bonusGranted: { type: Boolean, default: false }, // Legacy flag
   bonusDeviceId: String,
   friends: [String], // [username1, username2]
+  isBanned: { type: Boolean, default: false }, // Admin ban functionality
 }, { timestamps: true });
 const User = mongoose.model("User", UserSchema);
 
@@ -2300,6 +2301,119 @@ cron.schedule("0 * * * *", async () => {
 
 const PORT = Number(process.env.PORT || 8080);
 app.get("/health", (req, res) => res.status(200).send("ok"));
+
+// =======================
+// ADMIN: Login
+// =======================
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL || "admin@tipsmega888.com";
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "admin123";
+
+app.post("/api/admin/login", async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    if (email !== ADMIN_EMAIL || password !== ADMIN_PASSWORD) {
+      return res.status(401).json({ message: "Invalid credentials" });
+    }
+
+    const token = jwt.sign(
+      { email, isAdmin: true },
+      JWT_SECRET,
+      { expiresIn: "7d" }
+    );
+
+    return res.json({ ok: true, token });
+  } catch (e) {
+    return res.status(500).json({ error: "Login failed", detail: String(e.message) });
+  }
+});
+
+// =======================
+// ADMIN: JWT Auth Middleware
+// =======================
+function verifyAdminToken(req, res, next) {
+  const auth = String(req.headers.authorization || "");
+  const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+  if (!token) return res.status(401).json({ error: "Missing token" });
+  try {
+    const payload = jwt.verify(token, JWT_SECRET);
+    if (!payload.isAdmin) throw new Error("Not admin");
+    req.adminUser = payload;
+    next();
+  } catch (e) {
+    return res.status(401).json({ error: "Invalid/expired admin token" });
+  }
+}
+
+// =======================
+// ADMIN: List Users
+// =======================
+app.get("/api/admin/users", verifyAdminToken, async (req, res) => {
+  try {
+    const users = await User.find({}).select("-passHash -passSalt").sort({ createdAt: -1 }).limit(200);
+    return res.json({ users });
+  } catch (e) {
+    return res.status(500).json({ error: "Failed to fetch users", detail: String(e.message) });
+  }
+});
+
+// =======================
+// ADMIN: Get Single User
+// =======================
+app.get("/api/admin/users/:id", verifyAdminToken, async (req, res) => {
+  try {
+    const user = await User.findById(req.params.id).select("-passHash -passSalt");
+    if (!user) return res.status(404).json({ error: "User not found" });
+    return res.json({ user });
+  } catch (e) {
+    return res.status(500).json({ error: "Failed to fetch user", detail: String(e.message) });
+  }
+});
+
+// =======================
+// ADMIN: Toggle Ban User
+// =======================
+app.put("/api/admin/users/:id/ban", verifyAdminToken, async (req, res) => {
+  try {
+    const { isBanned } = req.body;
+    const user = await User.findByIdAndUpdate(
+      req.params.id,
+      { isBanned: Boolean(isBanned) },
+      { new: true }
+    ).select("-passHash -passSalt");
+    if (!user) return res.status(404).json({ error: "User not found" });
+    return res.json({ ok: true, user });
+  } catch (e) {
+    return res.status(500).json({ error: "Failed to update ban status", detail: String(e.message) });
+  }
+});
+
+// =======================
+// ADMIN: Adjust User Stars (bonusStars)
+// =======================
+app.put("/api/admin/users/:id/stars", verifyAdminToken, async (req, res) => {
+  try {
+    const { stars } = req.body; // amount to add (can be negative to deduct)
+    const amount = parseInt(stars) || 0;
+
+    const user = await User.findById(req.params.id);
+    if (!user) return res.status(404).json({ error: "User not found" });
+
+    user.bonusStars = (user.bonusStars || 0) + amount;
+    // Prevent negative
+    if (user.bonusStars < 0) user.bonusStars = 0;
+    await user.save();
+
+    return res.json({
+      ok: true,
+      username: user.username,
+      bonusStars: user.bonusStars,
+      message: `${amount > 0 ? '+' : ''}${amount} stars adjusted. New bonusStars: ${user.bonusStars}`
+    });
+  } catch (e) {
+    return res.status(500).json({ error: "Failed to adjust stars", detail: String(e.message) });
+  }
+});
 
 // CRITICAL: Change app.listen to server.listen for Socket.io
 server.listen(PORT, "0.0.0.0", () => console.log("API (Socket+Cron) running on port " + PORT));
