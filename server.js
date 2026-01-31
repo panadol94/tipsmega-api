@@ -2305,9 +2305,6 @@ app.get("/health", (req, res) => res.status(200).send("ok"));
 // =======================
 // ADMIN: Login
 // =======================
-const ADMIN_EMAIL = process.env.ADMIN_EMAIL || "admin@tipsmega888.com";
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "admin123";
-
 app.post("/api/admin/login", async (req, res) => {
   try {
     const { email, password } = req.body;
