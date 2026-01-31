@@ -2303,6 +2303,18 @@ const PORT = Number(process.env.PORT || 8080);
 app.get("/health", (req, res) => res.status(200).send("ok"));
 
 // =======================
+// PUBLIC: Games (for Scanner)
+// =======================
+app.get("/api/games", async (req, res) => {
+  try {
+    const games = await Game.find({ status: "ACTIVE" }).select("name rtp category image").sort({ name: 1 });
+    return res.json({ games });
+  } catch (e) {
+    return res.status(500).json({ error: "Failed to fetch games", detail: String(e.message) });
+  }
+});
+
+// =======================
 // ADMIN: Login
 // =======================
 app.post("/api/admin/login", async (req, res) => {
