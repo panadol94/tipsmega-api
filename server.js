@@ -1785,6 +1785,70 @@ app.delete("/api/admin/games/:id", adminAuth, async (req, res) => {
   }
 });
 
+// ADMIN: AUTO-SYNC GAMES FROM TXT FILE
+app.post("/api/admin/games/sync-from-txt", adminAuth, async (req, res) => {
+  try {
+    // Read mega888.txt file
+    const txtPath = path.join(__dirname, "../public/data/mega888.txt");
+
+    if (!fs.existsSync(txtPath)) {
+      return res.status(404).json({ error: "mega888.txt file not found" });
+    }
+
+    const content = fs.readFileSync(txtPath, "utf-8");
+    const gameNames = content
+      .split("\n")
+      .map(line => line.trim())
+      .filter(line => line.length > 0);
+
+    let added = 0;
+    let existing = 0;
+
+    // Get default RTP settings from admin settings
+    let settings = await AdminSettings.findOne({ key: "main" });
+    if (!settings) {
+      settings = await AdminSettings.create({ key: "main" });
+    }
+
+    const rtpMin = settings.rtpMin || 85;
+    const rtpMax = settings.rtpMax || 98;
+
+    // Process each game name
+    for (const name of gameNames) {
+      const existingGame = await Game.findOne({ name });
+
+      if (!existingGame) {
+        // Create new game with defaults
+        await Game.create({
+          name,
+          icon: "🎰",
+          category: "slots",
+          rtpMin,
+          rtpMax,
+          isHot: false,
+          isNew: true,
+          enabled: true,
+          order: 0
+        });
+        added++;
+      } else {
+        existing++;
+      }
+    }
+
+    res.json({
+      ok: true,
+      added,
+      existing,
+      total: gameNames.length
+    });
+  } catch (e) {
+    console.error("Sync error:", e);
+    res.status(500).json({ error: String(e.message) });
+  }
+});
+
+
 // ADMIN: COMPANIES CRUD
 app.post("/api/admin/companies", adminAuth, async (req, res) => {
   try {
