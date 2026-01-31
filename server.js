@@ -1661,7 +1661,10 @@ const adminAuth = (req, res, next) => {
     if (!token) return res.status(401).json({ error: "No token" });
 
     const decoded = jwt.verify(token, JWT_SECRET);
-    if (!decoded.isAdmin) return res.status(403).json({ error: "Not admin" });
+
+    // Support both old format (role: "ADMIN") and new format (isAdmin: true)
+    const isAuthorized = decoded.isAdmin === true || decoded.role === "ADMIN";
+    if (!isAuthorized) return res.status(403).json({ error: "Not admin" });
 
     req.adminUser = decoded;
     next();
