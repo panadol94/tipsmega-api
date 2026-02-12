@@ -2324,6 +2324,12 @@ app.post("/api/visitor-notify", async (req, res) => {
       return res.json({ ok: false, reason: "no admin group configured" });
     }
 
+    // Get visitor IP from request
+    const visitorIP = req.headers["x-forwarded-for"]?.split(",")[0]?.trim()
+      || req.headers["x-real-ip"]
+      || req.socket?.remoteAddress
+      || "Unknown";
+
     // Detect device type from user agent
     const ua = (userAgent || "").toLowerCase();
     let device = "🖥️ Desktop";
@@ -2331,22 +2337,46 @@ app.post("/api/visitor-notify", async (req, res) => {
     else if (/iphone|ipad|ipod/i.test(ua)) device = "📱 iOS";
     else if (/mobile/i.test(ua)) device = "📱 Mobile";
 
+    // Detect browser
+    let browser = "Unknown";
+    if (/edg/i.test(ua)) browser = "Edge";
+    else if (/chrome/i.test(ua) && !/edg/i.test(ua)) browser = "Chrome";
+    else if (/firefox/i.test(ua)) browser = "Firefox";
+    else if (/safari/i.test(ua) && !/chrome/i.test(ua)) browser = "Safari";
+    else if (/opera|opr/i.test(ua)) browser = "Opera";
+
     // Parse referrer
     let fromSource = "Direct";
     if (referrer) {
       try {
         const refUrl = new URL(referrer);
         const host = refUrl.hostname.toLowerCase();
-        if (host.includes("google")) fromSource = "Google";
-        else if (host.includes("facebook") || host.includes("fb.")) fromSource = "Facebook";
-        else if (host.includes("t.me") || host.includes("telegram")) fromSource = "Telegram";
-        else if (host.includes("tiktok")) fromSource = "TikTok";
-        else if (host.includes("instagram")) fromSource = "Instagram";
-        else if (host.includes("twitter") || host.includes("x.com")) fromSource = "Twitter/X";
+        if (host.includes("google")) fromSource = "🔍 Google";
+        else if (host.includes("facebook") || host.includes("fb.")) fromSource = "📘 Facebook";
+        else if (host.includes("t.me") || host.includes("telegram")) fromSource = "✈️ Telegram";
+        else if (host.includes("tiktok")) fromSource = "🎵 TikTok";
+        else if (host.includes("instagram")) fromSource = "📸 Instagram";
+        else if (host.includes("twitter") || host.includes("x.com")) fromSource = "🐦 Twitter/X";
+        else if (host.includes("youtube")) fromSource = "▶️ YouTube";
         else fromSource = refUrl.hostname;
       } catch {
         fromSource = referrer.substring(0, 30);
       }
+    }
+
+    // IP Geolocation lookup (free, no API key needed)
+    let location = "🌍 Unknown";
+    let isp = "";
+    try {
+      const geoRes = await axios.get(`http://ip-api.com/json/${visitorIP}?fields=status,country,regionName,city,isp,query`, { timeout: 3000 });
+      if (geoRes.data && geoRes.data.status === "success") {
+        const g = geoRes.data;
+        const parts = [g.city, g.regionName, g.country].filter(Boolean);
+        location = `🌍 ${parts.join(", ") || "Unknown"}`;
+        if (g.isp) isp = g.isp;
+      }
+    } catch {
+      // Geo lookup failed - continue with Unknown
     }
 
     // Format time (Malaysia timezone)
@@ -2360,7 +2390,18 @@ app.post("/api/visitor-notify", async (req, res) => {
       hour12: true,
     });
 
-    const message = `🔔 *Visitor Alert!*\n📄 Page: \`${page || "/"}\`\n🕐 Time: ${timeStr}\n${device}\n🔗 From: ${fromSource}`;
+    const lines = [
+      `🔔 *Visitor Alert!*`,
+      ``,
+      `📄 Page: \`${page || "/"}\``,
+      `🕐 Time: ${timeStr}`,
+      `${device} • ${browser}`,
+      `${location}`,
+      `🔗 From: ${fromSource}`,
+    ];
+    if (isp) lines.push(`📡 ISP: ${isp}`);
+
+    const message = lines.join("\n");
 
     await bot.sendMessage(targetGroup, message, { parse_mode: "Markdown" });
 
