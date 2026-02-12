@@ -2302,6 +2302,76 @@ cron.schedule("0 * * * *", async () => {
 });
 
 
+// =======================
+// VISITOR NOTIFICATION (Telegram)
+// =======================
+let lastVisitorNotifyTime = 0;
+const VISITOR_NOTIFY_COOLDOWN_MS = 30 * 1000; // 30 seconds
+
+app.post("/api/visitor-notify", async (req, res) => {
+  try {
+    const now = Date.now();
+
+    // Rate limit: max 1 notification per 30 seconds
+    if (now - lastVisitorNotifyTime < VISITOR_NOTIFY_COOLDOWN_MS) {
+      return res.json({ ok: true, throttled: true });
+    }
+    lastVisitorNotifyTime = now;
+
+    const { page, referrer, userAgent } = req.body || {};
+    const targetGroup = ADMIN_GROUP_ID;
+    if (!targetGroup) {
+      return res.json({ ok: false, reason: "no admin group configured" });
+    }
+
+    // Detect device type from user agent
+    const ua = (userAgent || "").toLowerCase();
+    let device = "🖥️ Desktop";
+    if (/android/i.test(ua)) device = "📱 Android";
+    else if (/iphone|ipad|ipod/i.test(ua)) device = "📱 iOS";
+    else if (/mobile/i.test(ua)) device = "📱 Mobile";
+
+    // Parse referrer
+    let fromSource = "Direct";
+    if (referrer) {
+      try {
+        const refUrl = new URL(referrer);
+        const host = refUrl.hostname.toLowerCase();
+        if (host.includes("google")) fromSource = "Google";
+        else if (host.includes("facebook") || host.includes("fb.")) fromSource = "Facebook";
+        else if (host.includes("t.me") || host.includes("telegram")) fromSource = "Telegram";
+        else if (host.includes("tiktok")) fromSource = "TikTok";
+        else if (host.includes("instagram")) fromSource = "Instagram";
+        else if (host.includes("twitter") || host.includes("x.com")) fromSource = "Twitter/X";
+        else fromSource = refUrl.hostname;
+      } catch {
+        fromSource = referrer.substring(0, 30);
+      }
+    }
+
+    // Format time (Malaysia timezone)
+    const timeStr = new Date().toLocaleString("en-MY", {
+      timeZone: "Asia/Kuala_Lumpur",
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: true,
+    });
+
+    const message = `🔔 *Visitor Alert!*\n📄 Page: \`${page || "/"}\`\n🕐 Time: ${timeStr}\n${device}\n🔗 From: ${fromSource}`;
+
+    await bot.sendMessage(targetGroup, message, { parse_mode: "Markdown" });
+
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error("Visitor notify error:", e.message);
+    return res.json({ ok: true }); // Silent fail - don't break visitor experience
+  }
+});
+
+
 const PORT = Number(process.env.PORT || 8080);
 app.get("/health", (req, res) => res.status(200).send("ok"));
 
