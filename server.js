@@ -183,6 +183,33 @@ const AdminSettingsSchema = new mongoose.Schema({
 }, { timestamps: true });
 const AdminSettings = mongoose.model("AdminSettings", AdminSettingsSchema);
 
+// 12. Visitor Tracking
+const VisitorSchema = new mongoose.Schema({
+  visitorId: { type: String, required: true, index: true },
+  ip: String,
+  page: String,
+  referrer: String,
+  fromSource: String,
+  userAgent: String,
+  device: String,
+  browser: String,
+  location: String,
+  isp: String,
+  screenRes: String,
+  language: String,
+  battery: Number,
+  utmSource: String,
+  utmMedium: String,
+  utmCampaign: String,
+  isReturning: { type: Boolean, default: false },
+  sessionDuration: Number,
+  isBot: { type: Boolean, default: false },
+}, { timestamps: true });
+VisitorSchema.index({ createdAt: 1 });
+VisitorSchema.index({ visitorId: 1, createdAt: -1 });
+VisitorSchema.index({ ip: 1, createdAt: -1 });
+const Visitor = mongoose.model("Visitor", VisitorSchema);
+
 
 // ===== HELPERS =====
 
@@ -2303,34 +2330,29 @@ cron.schedule("0 * * * *", async () => {
 
 
 // =======================
-// VISITOR NOTIFICATION (Telegram)
+// VISITOR NOTIFICATION (Telegram) — Enhanced v2
 // =======================
 let lastVisitorNotifyTime = 0;
-const VISITOR_NOTIFY_COOLDOWN_MS = 30 * 1000; // 30 seconds
+const VISITOR_NOTIFY_COOLDOWN_MS = 30 * 1000; // 30s Telegram cooldown (DB always saves)
 
 app.post("/api/visitor-notify", async (req, res) => {
   try {
     const now = Date.now();
+    const {
+      page, referrer, userAgent, visitorId,
+      screenRes, language, battery,
+      utmSource, utmMedium, utmCampaign
+    } = req.body || {};
 
-    // Rate limit: max 1 notification per 30 seconds
-    if (now - lastVisitorNotifyTime < VISITOR_NOTIFY_COOLDOWN_MS) {
-      return res.json({ ok: true, throttled: true });
-    }
-    lastVisitorNotifyTime = now;
-
-    const { page, referrer, userAgent } = req.body || {};
     const targetGroup = ADMIN_GROUP_ID;
-    if (!targetGroup) {
-      return res.json({ ok: false, reason: "no admin group configured" });
-    }
 
-    // Get visitor IP from request
+    // Get visitor IP
     const visitorIP = req.headers["x-forwarded-for"]?.split(",")[0]?.trim()
       || req.headers["x-real-ip"]
       || req.socket?.remoteAddress
       || "Unknown";
 
-    // Detect device type from user agent
+    // Detect device type
     const ua = (userAgent || "").toLowerCase();
     let device = "🖥️ Desktop";
     if (/android/i.test(ua)) device = "📱 Android";
@@ -2364,7 +2386,7 @@ app.post("/api/visitor-notify", async (req, res) => {
       }
     }
 
-    // IP Geolocation lookup (free, no API key needed)
+    // IP Geolocation lookup
     let location = "🌍 Unknown";
     let isp = "";
     try {
@@ -2376,39 +2398,213 @@ app.post("/api/visitor-notify", async (req, res) => {
         if (g.isp) isp = g.isp;
       }
     } catch {
-      // Geo lookup failed - continue with Unknown
+      // Geo lookup failed
     }
 
-    // Format time (Malaysia timezone)
-    const timeStr = new Date().toLocaleString("en-MY", {
-      timeZone: "Asia/Kuala_Lumpur",
-      day: "2-digit",
-      month: "short",
-      year: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: true,
+    // New vs Returning visitor check
+    let isReturning = false;
+    if (visitorId) {
+      const prevVisit = await Visitor.findOne({ visitorId }).sort({ createdAt: -1 });
+      if (prevVisit) isReturning = true;
+    }
+
+    // Bot detection: >10 hits from same IP in 5 minutes
+    let isBot = false;
+    const fiveMinAgo = new Date(now - 5 * 60 * 1000);
+    const recentHits = await Visitor.countDocuments({ ip: visitorIP, createdAt: { $gte: fiveMinAgo } });
+    if (recentHits > 10) isBot = true;
+
+    // Today's visitor count
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const todayCount = await Visitor.countDocuments({ createdAt: { $gte: todayStart } });
+    const todayUnique = await Visitor.distinct("visitorId", { createdAt: { $gte: todayStart } });
+
+    // Save to DB (always, regardless of Telegram cooldown)
+    await Visitor.create({
+      visitorId: visitorId || `anon_${visitorIP}`,
+      ip: visitorIP,
+      page: page || "/",
+      referrer,
+      fromSource,
+      userAgent,
+      device,
+      browser,
+      location,
+      isp,
+      screenRes: screenRes || "",
+      language: language || "",
+      battery: battery != null ? battery : null,
+      utmSource: utmSource || "",
+      utmMedium: utmMedium || "",
+      utmCampaign: utmCampaign || "",
+      isReturning,
+      isBot,
     });
 
-    const lines = [
-      `🔔 *Visitor Alert!*`,
-      ``,
-      `📄 Page: \`${page || "/"}\``,
-      `🕐 Time: ${timeStr}`,
-      `${device} • ${browser}`,
-      `${location}`,
-      `🔗 From: ${fromSource}`,
-    ];
-    if (isp) lines.push(`📡 ISP: ${isp}`);
+    // Telegram notification (with cooldown + skip bots)
+    if (targetGroup && !isBot && (now - lastVisitorNotifyTime >= VISITOR_NOTIFY_COOLDOWN_MS)) {
+      lastVisitorNotifyTime = now;
 
-    const message = lines.join("\n");
+      const timeStr = new Date().toLocaleString("en-MY", {
+        timeZone: "Asia/Kuala_Lumpur",
+        day: "2-digit", month: "short", year: "numeric",
+        hour: "2-digit", minute: "2-digit", hour12: true,
+      });
 
-    await bot.sendMessage(targetGroup, message, { parse_mode: "Markdown" });
+      const visitorLabel = isReturning ? "🔄 Returning Visitor" : "🆕 New Visitor";
+
+      const lines = [
+        `🔔 *${visitorLabel}*`,
+        ``,
+        `📄 Page: \`${page || "/"}\``,
+        `🕐 Time: ${timeStr}`,
+        `${device} • ${browser}`,
+        `${location}`,
+        `🔗 From: ${fromSource}`,
+      ];
+      if (isp) lines.push(`📡 ISP: ${isp}`);
+      if (screenRes) lines.push(`📐 Screen: ${screenRes}`);
+      if (language) lines.push(`🌐 Lang: ${language}`);
+      if (battery != null) lines.push(`🔋 Battery: ${Math.round(battery)}%`);
+      if (utmSource) lines.push(`📊 UTM: ${utmSource}${utmMedium ? "/" + utmMedium : ""}${utmCampaign ? "/" + utmCampaign : ""}`);
+      lines.push(`👥 Today: ${todayCount + 1} visits (${todayUnique.length + (isReturning ? 0 : 1)} unique)`);
+
+      const message = lines.join("\n");
+      await bot.sendMessage(targetGroup, message, { parse_mode: "Markdown" }).catch(err => {
+        console.error("Telegram send error:", err.message);
+      });
+    }
+
+    return res.json({ ok: true, isReturning });
+  } catch (e) {
+    console.error("Visitor notify error:", e.message);
+    return res.json({ ok: true }); // Silent fail
+  }
+});
+
+// VISITOR: Session Duration Tracking
+app.post("/api/visitor-leave", async (req, res) => {
+  try {
+    const { visitorId, duration } = req.body || {};
+    if (!visitorId || !duration) return res.json({ ok: false });
+
+    // Update the most recent visit for this visitor
+    const visitor = await Visitor.findOne({ visitorId }).sort({ createdAt: -1 });
+    if (visitor) {
+      visitor.sessionDuration = Math.round(duration);
+      await visitor.save();
+
+      // Notify if session was meaningful (>30 seconds) and not a bot
+      const targetGroup = ADMIN_GROUP_ID;
+      if (targetGroup && duration > 30 && !visitor.isBot) {
+        const mins = Math.floor(duration / 60);
+        const secs = Math.round(duration % 60);
+        const timeLabel = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
+        const msg = `⏱️ Visitor left: \`${visitor.page}\` — *${timeLabel}* session`;
+        await bot.sendMessage(targetGroup, msg, { parse_mode: "Markdown" }).catch(() => { });
+      }
+    }
 
     return res.json({ ok: true });
   } catch (e) {
-    console.error("Visitor notify error:", e.message);
-    return res.json({ ok: true }); // Silent fail - don't break visitor experience
+    console.error("Visitor leave error:", e.message);
+    return res.json({ ok: true });
+  }
+});
+
+// CRON: Daily Visitor Summary (midnight MYT = 4pm UTC)
+cron.schedule("0 16 * * *", async () => {
+  console.log("📊 Running Daily Visitor Summary...");
+  try {
+    const targetGroup = ADMIN_GROUP_ID;
+    if (!targetGroup) return;
+
+    // Yesterday's full day
+    const now = new Date();
+    const todayStart = new Date(now);
+    todayStart.setHours(0, 0, 0, 0);
+    const yesterdayStart = new Date(todayStart);
+    yesterdayStart.setDate(yesterdayStart.getDate() - 1);
+
+    const query = { createdAt: { $gte: yesterdayStart, $lt: todayStart } };
+
+    const totalVisits = await Visitor.countDocuments(query);
+    if (totalVisits === 0) {
+      await bot.sendMessage(targetGroup, "📊 *Daily Summary*\n\nNo visitors yesterday.", { parse_mode: "Markdown" }).catch(() => { });
+      return;
+    }
+
+    const uniqueVisitors = (await Visitor.distinct("visitorId", query)).length;
+    const newVisitors = await Visitor.countDocuments({ ...query, isReturning: false });
+    const returningVisitors = await Visitor.countDocuments({ ...query, isReturning: true });
+    const botHits = await Visitor.countDocuments({ ...query, isBot: true });
+
+    // Device breakdown
+    const mobileVisits = await Visitor.countDocuments({ ...query, device: { $regex: /mobile|android|ios/i } });
+    const desktopVisits = totalVisits - mobileVisits;
+    const mobilePct = totalVisits > 0 ? Math.round((mobileVisits / totalVisits) * 100) : 0;
+
+    // Top pages
+    const topPages = await Visitor.aggregate([
+      { $match: { ...query, isBot: false } },
+      { $group: { _id: "$page", count: { $sum: 1 } } },
+      { $sort: { count: -1 } },
+      { $limit: 5 }
+    ]);
+
+    // Top sources
+    const topSources = await Visitor.aggregate([
+      { $match: { ...query, isBot: false } },
+      { $group: { _id: "$fromSource", count: { $sum: 1 } } },
+      { $sort: { count: -1 } },
+      { $limit: 5 }
+    ]);
+
+    // Avg session duration
+    const avgDuration = await Visitor.aggregate([
+      { $match: { ...query, sessionDuration: { $gt: 0 }, isBot: false } },
+      { $group: { _id: null, avg: { $avg: "$sessionDuration" } } }
+    ]);
+    const avgSecs = avgDuration[0]?.avg || 0;
+    const avgMins = Math.floor(avgSecs / 60);
+    const avgSecsRem = Math.round(avgSecs % 60);
+
+    const dateLabel = yesterdayStart.toLocaleDateString("en-MY", {
+      timeZone: "Asia/Kuala_Lumpur",
+      day: "2-digit", month: "short", year: "numeric"
+    });
+
+    const lines = [
+      `📊 *Daily Visitor Summary*`,
+      `📅 ${dateLabel}`,
+      ``,
+      `👥 Total: *${totalVisits}* visits (*${uniqueVisitors}* unique)`,
+      `🆕 New: ${newVisitors} | 🔄 Returning: ${returningVisitors}`,
+      `📱 Mobile: ${mobilePct}% | 🖥️ Desktop: ${100 - mobilePct}%`,
+      `⏱️ Avg Session: ${avgMins}m ${avgSecsRem}s`,
+    ];
+
+    if (botHits > 0) lines.push(`🤖 Bot hits filtered: ${botHits}`);
+
+    if (topPages.length > 0) {
+      lines.push(``, `📄 *Top Pages:*`);
+      topPages.forEach((p, i) => lines.push(`  ${i + 1}. \`${p._id}\` — ${p.count}`));
+    }
+
+    if (topSources.length > 0) {
+      lines.push(``, `🔗 *Top Sources:*`);
+      topSources.forEach((s, i) => lines.push(`  ${i + 1}. ${s._id} — ${s.count}`));
+    }
+
+    const message = lines.join("\n");
+    await bot.sendMessage(targetGroup, message, { parse_mode: "Markdown" }).catch(err => {
+      console.error("Daily summary send error:", err.message);
+    });
+
+    console.log("✅ Daily visitor summary sent!");
+  } catch (e) {
+    console.error("Daily summary error:", e);
   }
 });
 
