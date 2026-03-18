@@ -2347,7 +2347,8 @@ app.post("/api/visitor-notify", async (req, res) => {
     const targetGroup = ADMIN_GROUP_ID;
 
     // Get visitor IP (prioritize Cloudflare header for real IP behind CF proxy)
-    const visitorIP = req.headers["cf-connecting-ip"]
+    const clientRealIP = req.body?.realIP;
+    const visitorIP = clientRealIP || req.headers["cf-connecting-ip"]
       || req.headers["x-forwarded-for"]?.split(",")[0]?.trim()
       || req.headers["x-real-ip"]
       || req.socket?.remoteAddress
@@ -2487,13 +2488,14 @@ app.post("/api/visitor-notify", async (req, res) => {
 // VISITOR: Session Duration Tracking
 app.post("/api/visitor-leave", async (req, res) => {
   try {
-    const { visitorId, duration } = req.body || {};
+    const { visitorId, duration, realIP } = req.body || {};
     if (!visitorId || !duration) return res.json({ ok: false });
 
     // Update the most recent visit for this visitor
     const visitor = await Visitor.findOne({ visitorId }).sort({ createdAt: -1 });
     if (visitor) {
       visitor.sessionDuration = Math.round(duration);
+      if (realIP && visitor.ip === "Unknown") visitor.ip = realIP;
       await visitor.save();
 
       // Notify if session was meaningful (>30 seconds) and not a bot
