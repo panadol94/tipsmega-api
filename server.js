@@ -2346,8 +2346,9 @@ app.post("/api/visitor-notify", async (req, res) => {
 
     const targetGroup = ADMIN_GROUP_ID;
 
-    // Get visitor IP
-    const visitorIP = req.headers["x-forwarded-for"]?.split(",")[0]?.trim()
+    // Get visitor IP (prioritize Cloudflare header for real IP behind CF proxy)
+    const visitorIP = req.headers["cf-connecting-ip"]
+      || req.headers["x-forwarded-for"]?.split(",")[0]?.trim()
       || req.headers["x-real-ip"]
       || req.socket?.remoteAddress
       || "Unknown";
