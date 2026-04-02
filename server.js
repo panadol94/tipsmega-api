@@ -41,6 +41,56 @@ const GROUP_LINK = "https://t.me/tipsmega888chat";
 const BOT_USERNAME = "@TIPSMEGA888OTPBOT";
 const OTP_TTL_MS = 3 * 60 * 1000; // 3 min
 
+function getBlobMimeType(filePath = "") {
+  const lowerPath = String(filePath || "").toLowerCase();
+  if (lowerPath.endsWith(".png")) return "image/png";
+  if (lowerPath.endsWith(".webp")) return "image/webp";
+  if (lowerPath.endsWith(".gif")) return "image/gif";
+  return "image/jpeg";
+}
+
+function extractTelegramMedia(msg) {
+  if (msg.photo?.length) {
+    return {
+      fileId: msg.photo[msg.photo.length - 1].file_id,
+      mediaType: "photo",
+      ext: "png",
+    };
+  }
+
+  if (msg.video) {
+    return {
+      fileId: msg.video.file_id,
+      mediaType: "video",
+      ext: "mp4",
+    };
+  }
+
+  if (msg.document) {
+    const mime = String(msg.document.mime_type || "").toLowerCase();
+    const fileName = String(msg.document.file_name || "").toLowerCase();
+
+    if (mime.startsWith("image/") || /\.(jpg|jpeg|png|webp|gif)$/i.test(fileName)) {
+      const ext = fileName.endsWith(".png") ? "png" : fileName.endsWith(".webp") ? "webp" : fileName.endsWith(".gif") ? "gif" : "png";
+      return {
+        fileId: msg.document.file_id,
+        mediaType: "photo",
+        ext,
+      };
+    }
+
+    if (mime.startsWith("video/") || /\.(mp4|mov|webm|m4v)$/i.test(fileName)) {
+      return {
+        fileId: msg.document.file_id,
+        mediaType: "video",
+        ext: fileName.endsWith(".webm") ? "webm" : fileName.endsWith(".mov") ? "mov" : fileName.endsWith(".m4v") ? "m4v" : "mp4",
+      };
+    }
+  }
+
+  return null;
+}
+
 // ===== CONNECT MONGODB =====
 mongoose.connect(MONGO_URL)
   .then(() => console.log("✅ Connected to MongoDB"))
@@ -558,52 +608,41 @@ bot.on("message", async (msg) => {
   if (wizard.step === 3 && msg.text) {
     wizard.data.caption = msg.text.trim().toUpperCase() === "SKIP" ? "" : msg.text.trim();
     wizard.step = 4;
-    return bot.sendMessage(chatId, "📷 Step 4: Hantar *gambar atau video* untuk company ini");
+    return bot.sendMessage(chatId, "📷 Step 4: Hantar *gambar, video, atau file image/video* untuk company ini");
   }
 
-  if (wizard.step === 4 && (msg.photo || msg.video)) {
-    try {
-      let fileId, mediaType, ext;
-      if (msg.photo) {
-        fileId = msg.photo[msg.photo.length - 1].file_id;
-        mediaType = "photo";
-        ext = "png"; // Changed to PNG for transparency support
-      } else {
-        fileId = msg.video.file_id;
-        mediaType = "video";
-        ext = "mp4";
-      }
+  if (wizard.step === 4) {
+    const media = extractTelegramMedia(msg);
+    if (!media) {
+      return bot.sendMessage(chatId, "❌ Sila hantar gambar, video, atau file image/video yang disokong.");
+    }
 
+    try {
+      const { fileId, mediaType, ext } = media;
       const file = await bot.getFile(fileId);
       const url = `https://api.telegram.org/file/bot${BOT_TOKEN}/${file.file_path}`;
 
       // Download as buffer for processing
-
       const response = await axios({ url, method: "GET", responseType: "arraybuffer" });
 
       const safeName = String(wizard.data.name || "company").replace(/[^\w\- ]+/g, "").trim() || "company";
       const fileName = `${Date.now()}.${ext}`;
-
       const uploadDir = path.join(__dirname, "public/uploads", safeName);
 
       if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
-
 
       const localPath = path.join(uploadDir, fileName);
 
       // Auto background removal for photos
       if (mediaType === "photo") {
         const imageBuffer = Buffer.from(response.data);
-
-        const blob = new Blob([imageBuffer]);
-
+        const mimeType = getBlobMimeType(file.file_path);
+        const blob = new Blob([imageBuffer], { type: mimeType });
         const resultBlob = await removeBackground(blob);
         const resultBuffer = Buffer.from(await resultBlob.arrayBuffer());
-
         fs.writeFileSync(localPath, resultBuffer);
       } else {
         // Video: save as-is
-
         fs.writeFileSync(localPath, response.data);
       }
 
@@ -619,7 +658,8 @@ bot.on("message", async (msg) => {
       });
 
       delete companyWizard[userId];
-      return bot.sendMessage(chatId, `✅ Company *${safeName}* telah LIVE di website! (Background auto-removed)`, { parse_mode: "Markdown" });
+      const bgNote = mediaType === "photo" ? " (Background auto-removed)" : "";
+      return bot.sendMessage(chatId, `✅ Company *${safeName}* telah LIVE di website!${bgNote}`, { parse_mode: "Markdown" });
     } catch (e) {
       delete companyWizard[userId];
       return bot.sendMessage(chatId, `❌ Upload gagal: ${e.message}. Cuba /addcompany semula.`);
@@ -654,7 +694,7 @@ bot.onText(/\/addmedia/, async (msg) => {
 
 // Media Wizard Handler
 bot.on("message", async (msg) => {
-  if (!msg.text && !msg.photo && !msg.video) return;
+  if (!msg.text && !msg.photo && !msg.video && !msg.document) return;
 
   const userId = msg.from.id;
   const chatId = msg.chat.id;
@@ -691,56 +731,44 @@ bot.on("message", async (msg) => {
 
     return bot.sendMessage(
       chatId,
-      `✅ Company: *${company.name}*\n\n📸 Hantar video atau gambar sekarang:`,
+      `✅ Company: *${company.name}*\n\n📸 Hantar video, gambar, atau file image/video sekarang:`,
       { parse_mode: "Markdown" }
     );
   }
 
   // Step 2: Receive media
-  if (wizard.step === 2 && (msg.photo || msg.video)) {
+  if (wizard.step === 2) {
+    const media = extractTelegramMedia(msg);
+    if (!media) {
+      return bot.sendMessage(chatId, "❌ Sila hantar gambar, video, atau file image/video yang disokong.");
+    }
+
     try {
-      let fileId, mediaType, ext;
-
-      if (msg.photo) {
-        fileId = msg.photo[msg.photo.length - 1].file_id;
-        mediaType = "photo";
-        ext = "png";
-      } else {
-        fileId = msg.video.file_id;
-        mediaType = "video";
-        ext = "mp4";
-      }
-
+      const { fileId, mediaType, ext } = media;
       const file = await bot.getFile(fileId);
       const url = `https://api.telegram.org/file/bot${BOT_TOKEN}/${file.file_path}`;
 
       // Download media
-
       const response = await axios({ url, method: "GET", responseType: "arraybuffer" });
 
       const safeName = wizard.data.companyName.replace(/[^\w\- ]+/g, "").trim();
       const fileName = `${Date.now()}.${ext}`;
-
       const uploadDir = path.join(__dirname, "public/uploads", safeName);
 
       if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
-
 
       const localPath = path.join(uploadDir, fileName);
 
       // Auto background removal for photos
       if (mediaType === "photo") {
         const imageBuffer = Buffer.from(response.data);
-
-        const blob = new Blob([imageBuffer]);
-
+        const mimeType = getBlobMimeType(file.file_path);
+        const blob = new Blob([imageBuffer], { type: mimeType });
         const resultBlob = await removeBackground(blob);
         const resultBuffer = Buffer.from(await resultBlob.arrayBuffer());
-
         fs.writeFileSync(localPath, resultBuffer);
       } else {
         // Video: save as-is
-
         fs.writeFileSync(localPath, response.data);
       }
 
