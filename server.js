@@ -1071,7 +1071,41 @@ app.post("/api/auth/register", async (req, res) => {
 });
 
 // =======================
-// AUTH: RESET PASSWORD
+// AUTH: VERIFY OTP (Phase 1 of password reset)
+// =======================
+app.post("/api/auth/verify-otp", async (req, res) => {
+  try {
+    const phone = normalizePhone(req.body?.phone);
+    const otp = String(req.body?.otp || "").trim();
+
+    if (!phone) return res.status(400).json({ error: "Invalid phone" });
+    if (!/^[0-9]{6}$/.test(otp)) return res.status(400).json({ error: "OTP must be 6 digits" });
+
+    // Verify OTP
+    const otpDoc = await WebOtp.findOne({ phone });
+    if (!otpDoc || otpDoc.expiresAt < new Date()) return res.status(400).json({ error: "OTP expired" });
+    if (otpDoc.attempts >= 3) {
+      await WebOtp.deleteOne({ phone });
+      return res.status(400).json({ error: "Too many attempts. Please request new OTP." });
+    }
+    if (otpDoc.otpHash !== hashOTP(otp)) {
+      otpDoc.attempts += 1;
+      await otpDoc.save();
+      return res.status(400).json({ error: "OTP Salah" });
+    }
+
+    const user = await User.findOne({ phone });
+    if (!user) return res.status(404).json({ error: "User not found" });
+
+    // Return username for display
+    return res.json({ ok: true, username: user.username });
+  } catch (e) {
+    return res.status(500).json({ error: "verify otp failed", detail: String(e.message) });
+  }
+});
+
+// =======================
+// AUTH: RESET PASSWORD (Phase 2 - requires OTP verification again)
 // =======================
 app.post("/api/auth/reset-password", async (req, res) => {
   try {
@@ -1080,8 +1114,9 @@ app.post("/api/auth/reset-password", async (req, res) => {
     const otp = String(req.body?.otp || "").trim();
 
     if (!phone) return res.status(400).json({ error: "Invalid phone" });
+    if (password.length < 6) return res.status(400).json({ error: "Password min 6 characters" });
 
-    // Verify OTP logic (simplified)
+    // Verify OTP logic
     const otpDoc = await WebOtp.findOne({ phone });
     if (!otpDoc || otpDoc.expiresAt < new Date()) return res.status(400).json({ error: "OTP expired" });
     if (otpDoc.otpHash !== hashOTP(otp)) return res.status(400).json({ error: "OTP Salah" });
